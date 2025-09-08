@@ -124,8 +124,10 @@ function select_estimates(est_res::Vector, size_index::Integer, estimator::Abstr
         return (r.β_ols, n)
     elseif est in ["ols fe", "fe", "fe-ols", "fe_ols"]
         return (r.β_fe, n)
-    elseif est in ["fgls"]
-        return (r.β_fgls, n)
+    elseif est in ["fgls1"]
+        return (r.β_fgls1, n)
+    elseif est in ["fgls2"]
+        return (r.β_fgls2, n)
     elseif est in ["gls"]
         return (r.β_gls, n)
     else
@@ -142,8 +144,10 @@ function select_variances(est_res::Vector, size_index::Integer, estimator::Abstr
         return r.v_ols
     elseif est in ["ols fe", "fe", "fe-ols", "fe_ols"]
         return r.v_fe
-    elseif est in ["fgls"]
-        return r.v_fgls
+    elseif est in ["fgls1"]
+        return r.v_fgls1
+    elseif est in ["fgls2"]
+        return r.v_fgls2
     elseif est in ["gls"]
         return r.v_gls
     else
@@ -222,7 +226,7 @@ choice ∈ (:bias, :variance). `size_range` may be a UnitRange of indices to kee
 """
 function plot_asymptotic(est_res::Vector;
     choice::Symbol=:bias,
-    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS","GLS"],
+    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS1","FGLS2","GLS"],
     true_beta::Real=0,
     size_range::Union{Nothing,UnitRange{Int}}=nothing,
     fig_size=(1280,720)
@@ -264,7 +268,7 @@ plot_multi_variance(est_res; estimators, size_range=nothing, log_scale=false)
 2×2 grid: per estimator plot empirical variance vs mean estimated variance with 95% CI.
 """
 function plot_multi_variance(est_res::Vector;
-    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS","GLS"],
+    estimators::Vector{<:AbstractString}=String["OLS FE","FGLS1","FGLS2", "GLS"],
     size_range::Union{Nothing,UnitRange{Int}}=nothing,
     log_scale::Bool=false,
     fig_size=(1280, 1280)
@@ -331,7 +335,7 @@ plot_variance_ratio(est_res; estimators, size_range=nothing)
 Plots mean(estimated variance) / empirical variance vs n.
 """
 function plot_variance_ratio(est_res::Vector;
-    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS","GLS"],
+    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS1","FGLS2","GLS"],
     size_range::Union{Nothing,UnitRange{Int}}=nothing,
     fig_size=(1280, 720)
 )
@@ -382,7 +386,7 @@ make_result_plots(; params, est_res=nothing, save=true)
   using `RCIO.load_estimation_results(params)`.
 - Applies theme from `params.plot_theme` (default :ggplot2).
 - Creates/saves plots per the switches in `params`:
-    - plot_dist_estimators::Vector{String} (default ["OLS","OLS FE","FGLS","GLS"])
+    - plot_dist_estimators::Vector{String} (default ["FGLS1","FGLS2"])
     - smoke_test_size::Int (which size index to use for the distribution plot)
     - make_asym_bias_plot::Bool (default true)
     - make_asym_variance_plot::Bool (default true)
@@ -433,8 +437,9 @@ function make_result_plots(; params::NamedTuple,
     # Choices from params (with safe defaults)
     size_idx    = get(p, :plot_dist_size_index, get(p, :smoke_test_size, 1))
     true_beta   = get(p, :beta_true, missing)
-    dist_ests   = get(p, :plot_dist_estimators, ["OLS","OLS FE","FGLS","GLS"])
-    asym_ests   = get(p, :asym_estimators,      ["OLS","OLS FE","FGLS","GLS"])
+    dist_ests   = get(p, :plot_dist_estimators, ["FGLS1","FGLS2"])
+    asym_ests   = get(p, :asym_estimators,      ["OLS","OLS FE","FGLS1","FGLS2","GLS"])
+    var_ratio_ests = get(p, :var_ratio_estimators, ["OLS","OLS FE","FGLS1","GLS"])
     log_varplot = get(p, :plot_log_variance, false)
 
     # 1) Distribution plots for the chosen size index (toggleable)
@@ -472,8 +477,8 @@ function make_result_plots(; params::NamedTuple,
     if show; display(plt_var); end
 
     # 4) 2×2 multi-variance panel
-    est4 = length(asym_ests) ≥ 4 ? asym_ests[1:4] : ["OLS","OLS FE","FGLS","GLS"]
-    plt_mv = plot_multi_variance(est_res; estimators=est4,
+    @assert length(var_ratio_ests) == 4 "var_ratio_estimators must have four entries"
+    plt_mv = plot_multi_variance(est_res; estimators=var_ratio_ests,
                                 size_range=size_range,
                                 log_scale=log_varplot);
     if save; savefig_multi_variance!(plt_mv, params); end

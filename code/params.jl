@@ -19,12 +19,17 @@ const PARAMS = (;
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices (can differ from DGP) ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal σ²_α I
-    j_block_est = true,
-    t_block_est = true,
+    j_block_est = false,
+    t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
+    # For FGLS1:
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
+    # For FGLS2:
+    repeat_alpha_fgls2 = true,
+    repeat_gamma_fgls2 = false,
+    repeat_lambda_fgls2 = false,
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor
@@ -32,8 +37,8 @@ const PARAMS = (;
 
     # --- GLS (oracle) controls ---
     repeat_alpha_gls = true,
-    repeat_gamma_gls = true,
-    repeat_lambda_gls = true,
+    repeat_gamma_gls = false,
+    repeat_lambda_gls = false,
     gls_shrinkage    = 1.0,    # off-diag shrink; 1.0 = none
     gls_project_spd  = false,    # clip eigvals ≥ gls_spd_floor
     gls_spd_floor    = 1e-8,
@@ -56,14 +61,14 @@ const PARAMS = (;
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
     i_block = true,
-    j_block = true,
+    j_block = false,
     t_block = false,
 
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
     i_draw_mode = :mixed,
-    j_draw_mode = :mixed,
-    t_draw_mode = :mixed,
+    j_draw_mode = :draw_once,
+    t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---
     E_i = 3.0,
@@ -96,15 +101,17 @@ const PARAMS = (;
     plot_dist_size_index = 6,
 
     # Which estimators to use in plots (strings matched case-insensitively)
-    plot_dist_estimators = ["FGLS"],
-    asym_estimators      = ["OLS","OLS FE","FGLS","GLS"],
+    plot_dist_estimators = ["FGLS1","FGLS2"],
+    asym_estimators      = ["OLS","OLS FE","FGLS1","FGLS2","GLS"],
+    var_ratio_estimators = ["OLS FE","FGLS1","FGLS2","GLS"],
+
 
     # For the 2×2 multi-variance panel, enable log scale if you want
     plot_log_variance = false,
 
 
     # bounds by *n* for asymptotic plots (optional)
-     asym_min_n = 90,
+     asym_min_n = 00,
      asym_max_n = 10000,
 
     # distribution styling (optional)

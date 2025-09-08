@@ -15,10 +15,11 @@ smoke_diagnosis!(; params)
 
 Loads the smoke-test dataset (suffix "_ST"), builds y, sorts rows to [:t,:j,:i],
 then:
-  • constructs FGLS Ω̂ (no GLS run), plots heatmap + prints eigen tables
+  • constructs FGLS1 Ω̂ (no GLS run), plots heatmap + prints eigen tables
+  • constructs FGLS2 Ω̂ (no GLS run), plots heatmap + prints eigen tables
   • constructs Oracle Ω★ from true small blocks, plots heatmap + prints eigen tables
 
-Returns NamedTuple (; Ωhat, Ωstar, sizes, path).
+Returns NamedTuple (; Ωhat = Ω̂₁, Ωhat2 = Ω̂₂, Ωstar, sizes, path).
 """
 function smoke_diagnosis!(; params::NamedTuple)
     p = params
@@ -36,15 +37,13 @@ function smoke_diagnosis!(; params::NamedTuple)
     RCBetaEstimators.add_y!(df; beta=p.beta_true, constant=p.c_true, x_col=:x)
     sort!(df, [:t, :j, :i])
 
-    # --- FGLS Ω̂ (no GLS run) ---
-    _, _, _, Ω̂ = RCBetaEstimators.fgls(
+    # --- FGLS1 Ω̂₁ (no GLS run) ---
+    _, _, _, Ω̂ = RCBetaEstimators.fgls1(
         df, N1, N2, T;
         x_col=:x, y_col=:y,
-        # NEW per-dimension estimation switches
         i_block_est = p.i_block_est,
         j_block_est = p.j_block_est,
         t_block_est = p.t_block_est,
-        # repeat pattern for FGLS
         repeat_alpha  = p.repeat_alpha_fgls,
         repeat_gamma  = p.repeat_gamma_fgls,
         repeat_lambda = p.repeat_lambda_fgls,
@@ -54,18 +53,40 @@ function smoke_diagnosis!(; params::NamedTuple)
         spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8)
     )
 
-    # Only plot heatmaps if requested
     do_plots = get(p, :smoke_plot_omega_heatmaps, true)
-
     if do_plots
         mode_str = "blocks(i=$(p.i_block_est), j=$(p.j_block_est), t=$(p.t_block_est))"
-        ttl1 = latexstring("\$\\mathrm{FGLS}\\ \\hat{\\Omega}_{\\mathrm{$mode_str}}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_fgls),\\ \\gamma=$(p.repeat_gamma_fgls),\\ \\lambda=$(p.repeat_lambda_fgls)\$")
+        ttl1 = latexstring("\$\\mathrm{FGLS1}\\ \\hat{\\Omega}_{\\mathrm{$mode_str}}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_fgls),\\ \\gamma=$(p.repeat_gamma_fgls),\\ \\lambda=$(p.repeat_lambda_fgls)\$")
         display(RCPlotting.plot_matrix_percentile(Ω̂; title=ttl1))
     end
-
     sum1, ext1 = RCPlotting.omega_eigen_tables(Ω̂; k=10)
-    println("\n[FGLS] eigenvalue summary:"); println(sum1)
-    println("\n[FGLS] smallest/largest:");   println(ext1)
+    println("\n[FGLS1] eigenvalue summary:"); println(sum1)
+    println("\n[FGLS1] smallest/largest:");   println(ext1)
+
+    # --- FGLS2 Ω̂₂ (no GLS run) ---
+    _, _, _, Ω̂2 = RCBetaEstimators.fgls2(
+        df, N1, N2, T;
+        x_col=:x, y_col=:y,
+        i_block_est = p.i_block_est,
+        j_block_est = p.j_block_est,
+        t_block_est = p.t_block_est,
+        repeat_alpha  = p.repeat_alpha_fgls2,
+        repeat_gamma  = p.repeat_gamma_fgls2,
+        repeat_lambda = p.repeat_lambda_fgls2,
+        run_gls   = false,
+        shrinkage = p.fgls_shrinkage,
+        project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
+        spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8)
+    )
+
+    if do_plots
+        mode_str2 = "blocks(i=$(p.i_block_est), j=$(p.j_block_est), t=$(p.t_block_est))"
+        ttl2f = latexstring("\$\\mathrm{FGLS2}\\ \\hat{\\Omega}_{\\mathrm{$mode_str2}}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_fgls2),\\ \\gamma=$(p.repeat_gamma_fgls2),\\ \\lambda=$(p.repeat_lambda_fgls2)\$")
+        display(RCPlotting.plot_matrix_percentile(Ω̂2; title=ttl2f))
+    end
+    sum2f, ext2f = RCPlotting.omega_eigen_tables(Ω̂2; k=10)
+    println("\n[FGLS2] eigenvalue summary:"); println(sum2f)
+    println("\n[FGLS2] smallest/largest:");   println(ext2f)
 
     # --- Oracle GLS Ω★ from true blocks (with repeats) ---
     Sα, Sγ, Sλ = RCOmegaEstimators.make_S_matrices(
@@ -90,15 +111,14 @@ function smoke_diagnosis!(; params::NamedTuple)
     end
 
     if do_plots
-        ttl2 = latexstring("\$\\mathrm{Oracle}\\ \\Omega^{\\star}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_gls),\\ \\gamma=$(p.repeat_gamma_gls),\\ \\lambda=$(p.repeat_lambda_gls)\$")
-        display(RCPlotting.plot_matrix_percentile(Ωstar; title=ttl2))
+        ttl3 = latexstring("\$\\mathrm{Oracle}\\ \\Omega^{\\star}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_gls),\\ \\gamma=$(p.repeat_gamma_gls),\\ \\lambda=$(p.repeat_lambda_gls)\$")
+        display(RCPlotting.plot_matrix_percentile(Ωstar; title=ttl3))
     end
-    
-    sum2, ext2 = RCPlotting.omega_eigen_tables(Ωstar; k=10)
-    println("\n[GLS] eigenvalue summary:"); println(sum2)
-    println("\n[GLS] smallest/largest:");   println(ext2)
+    sum3, ext3 = RCPlotting.omega_eigen_tables(Ωstar; k=10)
+    println("\n[GLS] eigenvalue summary:"); println(sum3)
+    println("\n[GLS] smallest/largest:");   println(ext3)
 
-    return (; Ωhat = Ω̂, Ωstar, sizes = st.sizes, path = st.path)
+    return (; Ωhat = Ω̂, Ωhat2 = Ω̂2, Ωstar, sizes = st.sizes, path = st.path)
 end
 
 """
@@ -107,7 +127,7 @@ find_outlier_estimates(est_res, size_index, estimator; cutoff, direction=:above)
 Return Vector{Tuple{Int,Float64}} of (rep_index, value) for estimates that
 are > cutoff (direction=:above) or < cutoff (direction=:below) at the given size.
 `est_res` is the Vector returned by mc_estimate_over_sizes.
-Valid estimators: "OLS", "OLS FE", "FGLS", "GLS".
+Valid estimators: "OLS", "OLS FE", "FGLS1", "FGLS2", "GLS".
 """
 function find_outlier_estimates(est_res::Vector, size_index::Integer, estimator::AbstractString;
                                 cutoff::Real, direction::Symbol=:above)
@@ -115,15 +135,15 @@ function find_outlier_estimates(est_res::Vector, size_index::Integer, estimator:
     row = est_res[size_index]
 
     est_map = Dict(
-        "OLS"   => row.β_ols,
-        "OLS FE"=> row.β_fe,
-        "FGLS"  => row.β_fgls,
-        "GLS"   => row.β_gls,
+        "OLS"    => row.β_ols,
+        "OLS FE" => row.β_fe,
+        "FGLS1"  => row.β_fgls1,
+        "FGLS2"  => row.β_fgls2,
+        "GLS"    => row.β_gls,
     )
     @assert haskey(est_map, estimator) "Unknown estimator: $estimator"
 
     vals = est_map[estimator]
-    # handle Union{Missing,Float64}
     data = collect(skipmissing(vals))
 
     if direction === :above

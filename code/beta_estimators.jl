@@ -5,7 +5,7 @@ using LinearAlgebra, Statistics, DataFrames
 
 import ..RCOmegaEstimators
 
-export add_y!, within_transform!, ols_estimation, ols, fe_ols, gls, fgls, oracle_gls 
+export add_y!, within_transform!, ols_estimation, ols, fe_ols, gls, fgls1, fgls2, oracle_gls
 
 # -----------------------------
 # Helpers
@@ -80,7 +80,7 @@ Keyword options:
 Returns (beta::Vector, resid::Vector, V::Matrix).
 """
 function ols_estimation(X::AbstractMatrix, y::AbstractVector;
-                        vcov::Symbol=:HC1,
+                        vcov::Symbol=:HC0,
                         cluster::Union{Nothing,AbstractVector}=nothing)
     n = length(y); @assert size(X,1) == n "Rows of X must match length of y"
     k = size(X,2)
@@ -180,7 +180,7 @@ function gls(df::DataFrame, Ω::AbstractMatrix; x_col::Symbol=:x, y_col::Symbol=
 end
 
 """
-FGLS on a DataFrame:
+FGLS1 on a DataFrame:
 1) OLS for β̂
 2) σ²_u, σ²_α/γ/λ via within-residuals
 3) Ωα/Ωγ/Ωλ blocks per `covariance_mode` (:homoskedastic, :mixed_i, :mixed_j, :mixed_t, :full_mixed)
@@ -188,11 +188,10 @@ FGLS on a DataFrame:
 5) Ω̂ = SαΩαSα' + SγΩγSγ' + SλΩλSλ' + σ²_u I
 6) GLS with Ω̂
 
-Returns (β̂_fgls, ê, V̂_fgls, Ω̂).
+Returns (β̂_fgls1, ê, V̂_fgls1, Ω̂).
 """
-function fgls(df::DataFrame, N1::Int, N2::Int, T::Int;
+function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
               x_col::Symbol=:x, y_col::Symbol=:y,
-              # NEW: per-dimension estimation switches
               i_block_est::Bool=true,
               j_block_est::Bool=true,
               t_block_est::Bool=true,
@@ -202,20 +201,21 @@ function fgls(df::DataFrame, N1::Int, N2::Int, T::Int;
               project_spd::Bool=false, spd_floor::Real=1e-8)
 
     # 1) OLS for initial β̂
-    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:HC1)
+    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
 
     # 2) σ² components
     sigmas = RCOmegaEstimators.estimate_homoskedastic_component_variances(
         df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col)
     σu2 = sigmas.sigma_u2
 
-    # 3) base blocks using the NEW per-dimension switches
+    # 3) base blocks Ω̂ᵢ, Ω̂ⱼ, Ω̂ₜ
     blocks = RCOmegaEstimators.estimate_omegas(
         df, N1, N2, T, sigmas, β̂_ols[2];
-        x_col=x_col,
+        x_col=x_col,                  
         i_block_est=i_block_est,
         j_block_est=j_block_est,
-        t_block_est=t_block_est
+        t_block_est=t_block_est,
+        two_step=false
     )
     Ωa, Ωg, Ωl = blocks.Ωa, blocks.Ωg, blocks.Ωl
 
@@ -252,6 +252,86 @@ function fgls(df::DataFrame, N1::Int, N2::Int, T::Int;
     β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col)
     return β̂_fgls, ê, V̂, Ω̂
 end
+
+"""
+FGLS2 on a DataFrame using two-step averaging of residual vectors.
+
+Returns (β̂_fgls2, ê, V̂_fgls2, Ω̂).
+"""
+function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
+              x_col::Symbol=:x, y_col::Symbol=:y,
+              i_block_est::Bool=true,
+              j_block_est::Bool=true,
+              t_block_est::Bool=true,
+              repeat_alpha::Bool=false, repeat_gamma::Bool=false, repeat_lambda::Bool=false,
+              run_gls::Bool=true, print_omega::Bool=false,
+              shrinkage::Real=1.0,
+              project_spd::Bool=false, spd_floor::Real=1e-8)
+
+    # 1) OLS for initial β̂
+    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
+
+    # 2) σ² Homoskedastic components (needed if any block is not estimated,
+    #    and for homoskedastic diagonals in those cases)
+    sigmas = RCOmegaEstimators.estimate_homoskedastic_component_variances(
+        df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col
+    )
+
+    # 3) get blocks + pooled σ̂_u^2 via two-step
+    blocks = RCOmegaEstimators.estimate_omegas(
+        df, N1, N2, T, sigmas, β̂_ols[2];
+        x_col=x_col,
+        i_block_est=i_block_est,
+        j_block_est=j_block_est,
+        t_block_est=t_block_est,
+        two_step=true,
+        return_sigma=true,
+        diag_subtract=false,
+        sigma_damp=1.0
+    )
+    Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
+    # This uses pooled σ̂_u^2 from two-step (not per-dim σ̂²_u)
+    σ2_u = blocks.sigma_u2    
+    #σ2_u = sigmas.sigma_u2
+
+
+
+    # 4) Repeat expansion if requested
+    if repeat_alpha;  Ωi = RCOmegaEstimators.repeat_block(Ωi, N2); end
+    if repeat_gamma;  Ωj = RCOmegaEstimators.repeat_block(Ωj, T);  end
+    if repeat_lambda; Ωt = RCOmegaEstimators.repeat_block(Ωt, N2); end
+
+    # 5) Build S matrices
+    Sα, Sγ, Sλ = RCOmegaEstimators.make_S_matrices(N1, N2, T;
+        repeat_alpha=repeat_alpha, repeat_gamma=repeat_gamma, repeat_lambda=repeat_lambda
+    )
+
+    # 6) Assemble Ω with σ̂_u^2 I
+    Ω̂ = RCOmegaEstimators.construct_omega(Ωi, Ωj, Ωt, Sα, Sγ, Sλ, σ2_u)
+
+    # 7) Optional shrinkage / SPD floor/projection
+    if shrinkage != 1.0
+        Ω̂ = RCOmegaEstimators.shrink_offdiagonal!(Ω̂, shrinkage)
+    end
+    if project_spd
+        Ω̂ = RCOmegaEstimators.project_to_spd(Ω̂; floor=spd_floor)
+    end
+
+    if print_omega
+        io = IOContext(stdout, :limit=>false, :compact=>false)
+        println("\nΩ̂ (", size(Ω̂,1), "×", size(Ω̂,2), "):")
+        show(io, "text/plain", Matrix(Ω̂))
+        println()
+    end
+
+    if !run_gls
+        return nothing, nothing, nothing, Ω̂
+    end
+
+    β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col)
+    return β̂_fgls, ê, V̂, Ω̂
+end
+
 
 """
 Oracle GLS using true small blocks (Ωᵢ, Ωⱼ, Ωₜ) from the DGP.

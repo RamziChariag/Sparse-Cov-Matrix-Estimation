@@ -9,7 +9,7 @@ export plot_matrix_percentile, omega_eigen_tables,
        sort_for_dim, arithmetic_mean_outer_products,
        generate_threeway_omegas, generate_single_component_omega,
        estimate_omegas, make_S_matrices, construct_omega, repeat_block,
-       shrink_offdiagonal!
+       shrink_offdiagonal!, make_psd_by_minimal_ridge
 
 # --- helpers ---
 
@@ -35,7 +35,6 @@ function make_psd_by_minimal_ridge(A::AbstractMatrix; strict::Bool=true, eps_rel
     end
     return S
 end
-
 
 "Repeat a covariance block along the diagonal `rep` times (kron(I(rep), Ω))."
 repeat_block(Ω::AbstractMatrix, rep::Integer) = kron(I(rep), Ω)
@@ -105,6 +104,44 @@ function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
     return M
 end
 
+"Two-step averaging: average residual vectors across the constant dimension
+before forming outer products, then average the resulting matrices."
+function two_step_mean_outer_products(resid::AbstractVector, component::Symbol,
+                                     N1::Int, N2::Int, T::Int)
+    if component === :i
+        arr = reshape(resid, N1, N2, T)
+        mean_t = dropdims(mean(arr; dims=3), dims=3)
+        M = zeros(eltype(resid), N1, N1)
+        @inbounds for j in 1:N2
+            v = @view mean_t[:, j]
+            M .+= v * v'
+        end
+        M ./= N2
+        return M
+    elseif component === :j
+        arr = reshape(resid, N2, N1, T)
+        mean_i = dropdims(mean(arr; dims=2), dims=2)
+        M = zeros(eltype(resid), N2, N2)
+        @inbounds for t in 1:T
+            v = @view mean_i[:, t]
+            M .+= v * v'
+        end
+        M ./= T
+        return M
+    elseif component === :t
+        arr = reshape(resid, T, N2, N1)
+        mean_i = dropdims(mean(arr; dims=3), dims=3)
+        M = zeros(eltype(resid), T, T)
+        @inbounds for j in 1:N2
+            v = @view mean_i[:, j]
+            M .+= v * v'
+        end
+        M ./= N2
+        return M
+    else
+        error("component must be :i, :j, or :t")
+    end
+end
  
 
 "σ²_u and σ²_α/γ/λ via differences of within-residual means."
@@ -160,46 +197,302 @@ function generate_single_component_omega(df::DataFrame, component::Symbol, N1::I
 end
 
 """
-Estimate base blocks (Ωα, Ωγ, Ωλ) using per-dimension switches:
+two_step_sigma_u(res, component, N1, N2, T)
 
-- i_block_est=true  ⇒ estimate full SPD block for i (via residual outer products)
-                    false ⇒ homoskedastic diagonal (σ²_α I)
-- j_block_est=true  ⇒ full SPD for j; false ⇒ σ²_γ I
-- t_block_est=true  ⇒ full SPD for t; false ⇒ σ²_λ I
+Compute σ̂_u^2 for a component using the two-step idea:
+  - Average-of-vectors is done over a 'repeat' dimension R (i: R=T; j: R=N1; t: R=N1 under current design).
+  - Here we estimate σ̂_u^2 as the average of within-cell sample variances across that repeat dimension.
 
-Returns the base-sized blocks WITHOUT repeat expansion.
+Assumes df has already been sorted for `component` before residuals `res` were built:
+  - :i  → sort! by [:t, :j, :i] ⇒ reshape (N1, N2, T), take var over dim=3 (t)
+  - :j  → sort! by [:t, :i, :j] ⇒ reshape (N2, N1, T), take var over dim=2 (i)
+  - :t  → sort! by [:j, :i, :t] ⇒ reshape (T,  N2, N1), take var over dim=3 (i)
+
+Returns: (σ2::Float64, R::Int, df_weight::Int)
+"""
+function two_step_sigma_u(res::AbstractVector{<:Real}, component::Symbol, N1::Int, N2::Int, T::Int)
+    @assert length(res) == N1*N2*T "res length mismatch with N1*N2*T"
+
+    if component === :i
+        # shape: [i, j, t], variance over t
+        A = reshape(res, N1, N2, T)
+        # sample var across t for each (i,j)
+        # var over last dim: mean((x - mean)^2) * R/(R-1)
+        σ2_cells = map(1:N1, 1:N2) do i, j
+            x = @view A[i, j, :]
+            T > 1 ? var(x; corrected=true) : 0.0
+        end
+        σ2_hat = mean(σ2_cells)
+        R = T
+        dfw = (N1*N2)*max(T-1, 0)
+        return (max(σ2_hat, 0.0), R, dfw)
+
+    elseif component === :j
+        # shape: [j, i, t], variance over i
+        A = reshape(res, N2, N1, T)
+        σ2_cells = map(1:N2, 1:N1, 1:T) do j, i, t
+            # We'll compute var across i by building all i for each (j,t) below
+            nothing
+        end
+        # Build (j,t) panels and take var across i
+        σsum = 0.0; cnt = 0
+        if N1 > 1
+            for t in 1:T, j in 1:N2
+                x = @view A[j, :, t]
+                σsum += var(x; corrected=true)
+                cnt += 1
+            end
+        end
+        σ2_hat = (cnt > 0 ? σsum / cnt : 0.0)
+        R = N1
+        dfw = (N2*T)*max(N1-1, 0)
+        return (max(σ2_hat, 0.0), R, dfw)
+
+    elseif component === :t
+        # shape: [t, j, i], variance over i (your current design averages over i)
+        A = reshape(res, T, N2, N1)
+        σsum = 0.0; cnt = 0
+        if N1 > 1
+            for t in 1:T, j in 1:N2
+                x = @view A[t, j, :]
+                σsum += var(x; corrected=true)
+                cnt += 1
+            end
+        end
+        σ2_hat = (cnt > 0 ? σsum / cnt : 0.0)
+        R = N1
+        dfw = (N2*T)*max(N1-1, 0)
+        return (max(σ2_hat, 0.0), R, dfw)
+
+    else
+        error("Unknown component: $component. Use :i, :j, or :t.")
+    end
+end
+
+"""
+generate_single_component_omega_twostep(df, component, N1, N2, T; x_col, y_col, beta_hat, return_sigma=false)
+
+Build the two-step block Ω_component AND (optionally) return (σ̂2_component, R_component, df_weight_component)
+computed from the same residuals used for the two-step averaging.
+
+If return_sigma=false (default) → returns Ω
+If return_sigma=true          → returns (Ω, σ̂2_component, R_component, df_weight_component)
+"""
+function generate_single_component_omega_twostep(
+    df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int;
+    x_col::Symbol, y_col::Symbol, beta_hat::Real, return_sigma::Bool=false
+)
+    if component === :i
+        dfi = sort_for_dim(df, :i)  # ensures [:t,:j,:i]
+        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
+        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ω = two_step_mean_outer_products(res, :i, N1, N2, T)
+        if return_sigma
+            σ2, R, dfw = two_step_sigma_u(res, :i, N1, N2, T)
+            return (Ω, σ2, R, dfw)
+        else
+            return Ω
+        end
+
+    elseif component === :j
+        dfj = sort_for_dim(df, :j)  # ensures [:t,:i,:j]
+        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
+        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ω = two_step_mean_outer_products(res, :j, N1, N2, T)
+        if return_sigma
+            σ2, R, dfw = two_step_sigma_u(res, :j, N1, N2, T)
+            return (Ω, σ2, R, dfw)
+        else
+            return Ω
+        end
+
+    elseif component === :t
+        dft = sort_for_dim(df, :t)  # ensures [:j,:i,:t] (t fastest)
+        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
+        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ω = two_step_mean_outer_products(res, :t, N1, N2, T)
+        if return_sigma
+            σ2, R, dfw = two_step_sigma_u(res, :t, N1, N2, T)
+            return (Ω, σ2, R, dfw)
+        else
+            return Ω
+        end
+
+    else
+        error("Unknown component: $component")
+    end
+end
+
+"""
+Estimate base blocks (Ωα, Ωγ, Ωλ) using per-dimension switches.
+
+Single-step (two_step=false):
+  - Uses residual outer-products (no pre-averaging).
+  - Returns base-sized blocks WITHOUT repeat expansion.
+
+Two-step (two_step=true):
+  - For each estimated component, average residual vectors over the repeated
+    dimension R (i: R=T; j: R=N1; t: R=N1), form outer products of those means,
+    then average matrices.
+  - Computes a df-weighted pooled σ̂_u^2 from per-cell sample variances across
+    the repeated dimension.
+  - Subtracts (sigma_damp * σ̂_u^2 / R) from the diagonal of each estimated
+    base block BEFORE any SPD projection/repeats.
+  - If `return_sigma=true`, also returns the pooled σ̂_u^2.
+
+Signature kept backward-compatible with your old calls.
 """
 function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          sigmas::NamedTuple, beta_hat::Real;
-                         x_col::Symbol=:x,
+                         x_col::Symbol=:x, y_col::Symbol=:y,
                          i_block_est::Bool=true,
                          j_block_est::Bool=true,
-                         t_block_est::Bool=true)
+                         t_block_est::Bool=true,
+                         two_step::Bool=false,
+                         return_sigma::Bool=false,
+                         diag_subtract::Bool=false,
+                         sigma_damp::Real=1.0)
 
-    σu2 = sigmas.sigma_u2
+    if !two_step
+        # --- single-step procedure (unchanged) ---
+        σu2 = sigmas.sigma_u2
 
-    # i / α
+        Ωa = if i_block_est
+            generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+        else
+            sigmas.sigma_alpha2 * I(N1)
+        end
+
+        Ωg = if j_block_est
+            generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+        else
+            sigmas.sigma_gamma2 * I(N2)
+        end
+
+        Ωl = if t_block_est
+            generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+        else
+            sigmas.sigma_lambda2 * I(T)
+        end
+
+        return (; Ωa, Ωg, Ωl)
+    end
+
+    # =========================
+    # Two-step path (FGLS2)
+    # =========================
+
+    # Accumulators for pooled σ̂_u^2
+    σ2_parts = Float64[]   # component-specific σ̂_u^2
+    dfw      = Int[]       # df weights used for pooling
+
+    # Keep component-specific sigmas in scope for debug/diagonal subtraction
+    σ2α = 0.0; σ2γ = 0.0; σ2λ = 0.0
+
+    var_over_last(x) = var(x; corrected=true)  # sample variance
+
+    # i / α : mean over t for each (i,j); outer product averaged over j
     Ωa = if i_block_est
-        generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col)
+        dfi = sort_for_dim(df, :i)
+        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
+        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ωα = two_step_mean_outer_products(res, :i, N1, N2, T)
+
+        # σ̂_{u,α}^2: avg sample variance across t within (i,j)
+        σsum = 0.0; cells = 0
+        if T > 1
+            A = reshape(res, N1, N2, T)
+            @inbounds for i in 1:N1, j in 1:N2
+                σsum += var_over_last(@view A[i, j, :])
+                cells += 1
+            end
+        end
+        σ2α = cells > 0 ? σsum / cells : 0.0
+        push!(σ2_parts, max(σ2α, 0.0))
+        push!(dfw, (N1*N2)*max(T-1, 0))
+        Symmetric(Matrix(Ωα))
     else
         sigmas.sigma_alpha2 * I(N1)
     end
 
-    # j / γ
+    # j / γ : mean over i for each (j,t); outer product averaged over t
     Ωg = if j_block_est
-        generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col)
+        dfj = sort_for_dim(df, :j)
+        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
+        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ωγ = two_step_mean_outer_products(res, :j, N1, N2, T)
+
+        σsum = 0.0; cells = 0
+        if N1 > 1
+            A = reshape(res, N2, N1, T)  # [j, i, t]
+            @inbounds for t in 1:T, j in 1:N2
+                σsum += var_over_last(@view A[j, :, t])  # variance across i
+                cells += 1
+            end
+        end
+        σ2γ = cells > 0 ? σsum / cells : 0.0
+        push!(σ2_parts, max(σ2γ, 0.0))
+        push!(dfw, (N2*T)*max(N1-1, 0))
+        Symmetric(Matrix(Ωγ))
     else
         sigmas.sigma_gamma2 * I(N2)
     end
 
-    # t / λ
+    # t / λ : mean over i for each (t,j); outer product averaged over j
     Ωl = if t_block_est
-        generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col)
+        dft = sort_for_dim(df, :t)
+        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
+        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+
+        Ωλ = two_step_mean_outer_products(res, :t, N1, N2, T)
+
+        σsum = 0.0; cells = 0
+        if N1 > 1
+            A = reshape(res, T, N2, N1)  # [t, j, i]
+            @inbounds for t in 1:T, j in 1:N2
+                σsum += var_over_last(@view A[t, j, :])  # variance across i
+                cells += 1
+            end
+        end
+        σ2λ = cells > 0 ? σsum / cells : 0.0
+        push!(σ2_parts, max(σ2λ, 0.0))
+        push!(dfw, (N2*T)*max(N1-1, 0))
+        Symmetric(Matrix(Ωλ))
     else
         sigmas.sigma_lambda2 * I(T)
     end
 
-    return (; Ωa, Ωg, Ωl)
+    # --- optional diagonal subtraction: subtract component-specific σ̂ / R per block ---
+    if diag_subtract
+        if i_block_est && σ2α > 0
+            @inbounds for k in 1:size(Ωa,1)
+                Ωa[k,k] -= sigma_damp * (σ2α / T)
+            end
+        end
+        if j_block_est && σ2γ > 0
+            @inbounds for k in 1:size(Ωg,1)
+                Ωg[k,k] -= sigma_damp * (σ2γ / N1)
+            end
+        end
+        if t_block_est && σ2λ > 0
+            @inbounds for k in 1:size(Ωl,1)
+                Ωl[k,k] -= sigma_damp * (σ2λ / N1)
+            end
+        end
+    end
+
+    # --- pooled σ̂_u^2 (df-weighted across available components) ---
+    total_df = sum(dfw)
+    σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
+    σ2_u = max(σ2_u, 0.0)
+
+
+    return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
 end
 
 "Build Sα, Sγ, Sλ per your repeat rules (n × cols)."
