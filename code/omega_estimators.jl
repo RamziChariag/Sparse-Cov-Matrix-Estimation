@@ -104,45 +104,56 @@ function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
     return M
 end
 
-"Two-step averaging: average residual vectors across the constant dimension
-before forming outer products, then average the resulting matrices."
+"Centered, Bessel-corrected mean of clusterwise outer products of length `block_size` chunks."
+function arithmetic_mean_outer_products_with_demeaning(resid::AbstractVector, block_size::Int)
+    n = length(resid)
+    @assert n % block_size == 0
+    m = div(n, block_size)
+
+    μ = zeros(eltype(resid), block_size)
+    @inbounds for b in 0:m-1
+        μ .+= @view resid[b*block_size + 1 : (b+1)*block_size]
+    end
+    μ ./= m
+
+    M = zeros(eltype(resid), block_size, block_size)
+    @inbounds for b in 0:m-1
+        r = @view resid[b*block_size + 1 : (b+1)*block_size]
+        d = r .- μ
+        M .+= d * d'
+    end
+    M ./= (m - 1)
+    return M
+end
+
+"""
+Two-step averaging: average residual vectors across the *constant* dimension
+before forming outer products, then average the resulting matrices.
+
+Assumes resid is ordered with i fastest, then j, then t.
+So reshape(resid, N1, N2, T) gives A[i,j,t].
+"""
 function two_step_mean_outer_products(resid::AbstractVector, component::Symbol,
-                                     N1::Int, N2::Int, T::Int)
+                                      N1::Int, N2::Int, T::Int)
+
+    A = reshape(resid, N1, N2, T)  # i, j, t
+
     if component === :i
-        arr = reshape(resid, N1, N2, T)
-        mean_t = dropdims(mean(arr; dims=3), dims=3)
-        M = zeros(eltype(resid), N1, N1)
-        @inbounds for j in 1:N2
-            v = @view mean_t[:, j]
-            M .+= v * v'
-        end
-        M ./= N2
-        return M
+        X = dropdims(mean(A; dims=3), dims=3)           # N1×N2  (columns = j replicates)
+        return (X * X') / N2
+
     elseif component === :j
-        arr = reshape(resid, N2, N1, T)
-        mean_i = dropdims(mean(arr; dims=2), dims=2)
-        M = zeros(eltype(resid), N2, N2)
-        @inbounds for t in 1:T
-            v = @view mean_i[:, t]
-            M .+= v * v'
-        end
-        M ./= T
-        return M
+        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T   (columns = t replicates)
+        return (Y * Y') / T
+
     elseif component === :t
-        arr = reshape(resid, T, N2, N1)
-        mean_i = dropdims(mean(arr; dims=3), dims=3)
-        M = zeros(eltype(resid), T, T)
-        @inbounds for j in 1:N2
-            v = @view mean_i[:, j]
-            M .+= v * v'
-        end
-        M ./= N2
-        return M
+        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T
+        W = permutedims(Y, (2, 1))                      # T×N2   (columns = j replicates)
+            return (W * W') / N2
     else
         error("component must be :i, :j, or :t")
     end
-end
- 
+end 
 
 "σ²_u and σ²_α/γ/λ via differences of within-residual means."
 function estimate_homoskedastic_component_variances(df::DataFrame, N1::Int, N2::Int, T::Int,
@@ -165,32 +176,52 @@ function estimate_homoskedastic_component_variances(df::DataFrame, N1::Int, N2::
 end
 
 
-"Generate only one base block (no repeat expansion). component ∈ (:i,:j,:t)."
+"""
+    generate_single_component_omega(df, component, N1, N2, T, sigma_u2, beta_hat;
+                                    x_col=:x, y_col=:y,
+                                    subtract_sigma=false, do_ridge=false)
+
+Generate one base Ω_block for `component ∈ (:i, :j, :t)` **without sorting df**.
+Assumes `df` rows are already ordered so that when you vectorize, `i` varies fastest,
+then `j`, then `t` (i.e., consistent with your DGP and `reshape(res, N1, N2, T)`).
+
+Estimator: raw moment (divide by the number of “other-dimension” combinations).
+
+- :i → Ω_i = (B * B') / (N2*T), where B = reshape(A, N1, N2*T)
+- :j → Ω_j = (B * B') / (N1*T), where B = reshape(permutedims(A,(2,1,3)), N2, N1*T)
+- :t → Ω_t = (B * B') / (N1*N2), where B = reshape(permutedims(A,(3,2,1)), T, N2*N1)
+"""
 function generate_single_component_omega(df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int,
-                                         sigma_u2::Real, beta_hat::Real; x_col::Symbol=:x, y_col::Symbol=:y)
-    if component === :i
-        dfi = sort_for_dim(df, :i)
-        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
-        Ω = arithmetic_mean_outer_products(res, N1)
-        #@views Ω[diagind(Ω)] .-= sigma_u2
-        #Ω = make_psd_by_minimal_ridge(Ω; strict=true)
+                                         sigma_u2::Real, beta_hat::Real;
+                                         x_col::Symbol=:x, y_col::Symbol=:y,
+                                         subtract_sigma_u2::Bool=false, do_ridge::Bool=false)
+
+    # Pick the residual suffix for the component (no sorting; use df as-is)
+    suffix = component === :i ? "gamma_lambda" :
+             component === :j ? "alpha_lambda" :
+             component === :t ? "alpha_gamma" :
+             error("component must be :i, :j, or :t")
+
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix])
+    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col)
+    @assert length(res) == N1 * N2 * T "Residual vector has wrong length."
+
+    # Reshape to A[i,j,t] under the canonical DGP order (i fastest → j → t)
+    A = reshape(res, N1, N2, T)
+
+    # Raw-moment estimator via matrix products (fast, no chunking, no sorting)
+    Ω = if component === :i
+        # Stack (j,t) along columns: N1 × (N2*T)
+        B = reshape(A, N1, N2*T)
+        (B * B') / (N2 * T)
     elseif component === :j
-        dfj = sort_for_dim(df, :j)
-        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
-        Ω = arithmetic_mean_outer_products(res, N2)
-        #@views Ω[diagind(Ω)] .-= sigma_u2
-        #Ω = make_psd_by_minimal_ridge(Ω; strict=true)
-    elseif component === :t
-        dft = sort_for_dim(df, :t)
-        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
-        Ω = arithmetic_mean_outer_products(res, T)
-        #@views Ω[diagind(Ω)] .-= sigma_u2
-        #Ω = make_psd_by_minimal_ridge(Ω; strict=true)
-    else
-        error("component must be :i, :j, or :t")
+        # Move j to rows: N2 × (N1*T)
+        B = reshape(permutedims(A, (2, 1, 3)), N2, N1*T)
+        (B * B') / (N1 * T)
+    else # :t
+        # Move t to rows: T × (N2*N1)
+        B = reshape(permutedims(A, (3, 2, 1)), T, N2*N1)
+        (B * B') / (N1 * N2)
     end
 
     return Ω
@@ -282,49 +313,35 @@ function generate_single_component_omega_twostep(
     df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int;
     x_col::Symbol, y_col::Symbol, beta_hat::Real, return_sigma::Bool=false
 )
-    if component === :i
-        dfi = sort_for_dim(df, :i)  # ensures [:t,:j,:i]
-        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+    # Always sort rows so that i is fastest in the flattened vector:
+    dfo = sort(df, [:t, :j, :i])
 
-        Ω = two_step_mean_outer_products(res, :i, N1, N2, T)
-        if return_sigma
-            σ2, R, dfw = two_step_sigma_u(res, :i, N1, N2, T)
-            return (Ω, σ2, R, dfw)
-        else
-            return Ω
-        end
+    if component === :i
+        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
+        res = residuals_from_suffix(dfo, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
     elseif component === :j
-        dfj = sort_for_dim(df, :j)  # ensures [:t,:i,:j]
-        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
-
-        Ω = two_step_mean_outer_products(res, :j, N1, N2, T)
-        if return_sigma
-            σ2, R, dfw = two_step_sigma_u(res, :j, N1, N2, T)
-            return (Ω, σ2, R, dfw)
-        else
-            return Ω
-        end
+        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
+        res = residuals_from_suffix(dfo, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
     elseif component === :t
-        dft = sort_for_dim(df, :t)  # ensures [:j,:i,:t] (t fastest)
-        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
-
-        Ω = two_step_mean_outer_products(res, :t, N1, N2, T)
-        if return_sigma
-            σ2, R, dfw = two_step_sigma_u(res, :t, N1, N2, T)
-            return (Ω, σ2, R, dfw)
-        else
-            return Ω
-        end
+        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
+        res = residuals_from_suffix(dfo, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
 
     else
         error("Unknown component: $component")
     end
+
+    Ω = two_step_mean_outer_products(res, component, N1, N2, T)
+
+    if return_sigma
+        σ2, R, dfw = two_step_sigma_u(res, component, N1, N2, T)
+        return (Ω, σ2, R, dfw)
+    else
+        return Ω
+    end
 end
+
 
 """
 Estimate base blocks (Ωα, Ωγ, Ωλ) using per-dimension switches.
@@ -353,30 +370,48 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          t_block_est::Bool=true,
                          two_step::Bool=false,
                          return_sigma::Bool=false,
-                         diag_subtract::Bool=false,
+                         subtract_sigma_u2::Bool=true,
                          sigma_damp::Real=1.0)
 
     if !two_step
         # --- single-step procedure (unchanged) ---
         σu2 = sigmas.sigma_u2
 
-        Ωa = if i_block_est
-            generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
-        else
-            sigmas.sigma_alpha2 * I(N1)
-        end
+        Ωa = 
+            if i_block_est
+                Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                if subtract_sigma_u2
+                    # subtract σ̂_u^2 / T from diag
+                    @views Ωα[diagind(Ωα)] .-= sigma_damp * (σu2 / T)
+                end
+                Symmetric(Matrix(Ωα))
+            else
+                sigmas.sigma_alpha2 * I(N1)
+            end
 
-        Ωg = if j_block_est
-            generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
-        else
-            sigmas.sigma_gamma2 * I(N2)
-        end
+        Ωg = 
+            if j_block_est
+                Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                if subtract_sigma_u2
+                    # subtract σ̂_u^2 / N1 from diag
+                    @views Ωγ[diagind(Ωγ)] .-= sigma_damp * (σu2 / N1)
+                end
+                Symmetric(Matrix(Ωγ))
+            else
+                sigmas.sigma_gamma2 * I(N2)
+            end
 
-        Ωl = if t_block_est
-            generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
-        else
-            sigmas.sigma_lambda2 * I(T)
-        end
+        Ωl = 
+            if t_block_est
+                Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                if subtract_sigma_u2
+                    # subtract σ̂_u^2 / N1 from diag
+                    @views Ωλ[diagind(Ωλ)] .-= sigma_damp * (σu2 / N1)
+                end
+                Symmetric(Matrix(Ωλ))
+            else
+                sigmas.sigma_lambda2 * I(T)
+            end
 
         return (; Ωa, Ωg, Ωl)
     end
@@ -414,6 +449,9 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         σ2α = cells > 0 ? σsum / cells : 0.0
         push!(σ2_parts, max(σ2α, 0.0))
         push!(dfw, (N1*N2)*max(T-1, 0))
+        if subtract_sigma_u2 && σ2α > 0
+            @views Ωα[diagind(Ωα)] .-= sigma_damp * (σ2α / T)
+        end
         Symmetric(Matrix(Ωα))
     else
         sigmas.sigma_alpha2 * I(N1)
@@ -438,6 +476,9 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         σ2γ = cells > 0 ? σsum / cells : 0.0
         push!(σ2_parts, max(σ2γ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
+        if subtract_sigma_u2 && σ2γ > 0
+            @views Ωγ[diagind(Ωγ)] .-= sigma_damp * (σ2γ / N1)
+        end
         Symmetric(Matrix(Ωγ))
     else
         sigmas.sigma_gamma2 * I(N2)
@@ -462,28 +503,12 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         σ2λ = cells > 0 ? σsum / cells : 0.0
         push!(σ2_parts, max(σ2λ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
+        if subtract_sigma_u2 && σ2λ > 0
+            @views Ωλ[diagind(Ωλ)] .-= sigma_damp * (σ2λ / N1)
+        end
         Symmetric(Matrix(Ωλ))
     else
         sigmas.sigma_lambda2 * I(T)
-    end
-
-    # --- optional diagonal subtraction: subtract component-specific σ̂ / R per block ---
-    if diag_subtract
-        if i_block_est && σ2α > 0
-            @inbounds for k in 1:size(Ωa,1)
-                Ωa[k,k] -= sigma_damp * (σ2α / T)
-            end
-        end
-        if j_block_est && σ2γ > 0
-            @inbounds for k in 1:size(Ωg,1)
-                Ωg[k,k] -= sigma_damp * (σ2γ / N1)
-            end
-        end
-        if t_block_est && σ2λ > 0
-            @inbounds for k in 1:size(Ωl,1)
-                Ωl[k,k] -= sigma_damp * (σ2λ / N1)
-            end
-        end
     end
 
     # --- pooled σ̂_u^2 (df-weighted across available components) ---
@@ -526,7 +551,7 @@ function construct_omega(Ωa::AbstractMatrix, Ωg::AbstractMatrix, Ωl::Abstract
     Ω .+= Sγ * Ωg * Sγ'
     Ω .+= Sλ * Ωl * Sλ'
     Ω .+= sigma_u2 .* I(n)
-    return Symmetric(Ω)  # helps the solver
+    return Symmetric(Ω)  
 end
 
 function shrink_offdiagonal!(Ω::AbstractMatrix, α::Real)

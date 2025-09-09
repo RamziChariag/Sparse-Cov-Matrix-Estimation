@@ -62,8 +62,8 @@ function estimate_all(df::DataFrame;
     i_block_est::Bool=true, j_block_est::Bool=false, t_block_est::Bool=false,
     rep_a_fgls::Bool=false, rep_g_fgls::Bool=false, rep_l_fgls::Bool=false,
     rep_a_fgls2::Bool=false, rep_g_fgls2::Bool=false, rep_l_fgls2::Bool=false,
-    fgls_shrinkage::Real=1.0,
-    fgls_project_spd::Bool=false, fgls_spd_floor::Real=1e-8,
+    subtract_sigma_u2_fgls1::Bool=false, subtract_sigma_u2_fgls2::Bool=false,
+    fgls_shrinkage::Real=1.0, fgls_project_spd::Bool=false, fgls_spd_floor::Real=1e-8,
 
     # Oracle GLS (pass true blocks to enable)
     Ωi_star::Union{Nothing,AbstractMatrix}=nothing,
@@ -72,9 +72,6 @@ function estimate_all(df::DataFrame;
     rep_a_gls::Bool=true, rep_g_gls::Bool=false, rep_l_gls::Bool=false,
     gls_shrinkage::Real=1.0, gls_project_spd::Bool=false, gls_spd_floor::Real=1e-8,
     sigma_u2_oracle::Real=1.0,
-
-    # ordering
-    sort_for_gls::Bool=true
 )
     # 0) Build y (idempotent)
     RCBetaEstimators.add_y!(df; beta=beta_true, constant=c_true, x_col=:x)
@@ -91,7 +88,7 @@ function estimate_all(df::DataFrame;
     se_fe = sqrt.(max.(diag(V_fe), 0))
 
     # Prepare a view with correct row order for (F)GLS (i fastest ⇒ [:t,:j,:i])
-    df_gls = sort_for_gls ? sort(df, [:t,:j,:i]) : df
+    df_gls = sort(df, [:t,:j,:i])
 
     # 3a) FGLS1
     β_fgls1 = nothing; e_fgls1 = nothing; V_fgls1 = nothing; Ωhat1 = nothing; se_fgls1 = nothing
@@ -105,6 +102,7 @@ function estimate_all(df::DataFrame;
             repeat_alpha  = rep_a_fgls,
             repeat_gamma  = rep_g_fgls,
             repeat_lambda = rep_l_fgls,
+            subtract_sigma_u2_fgls1 = subtract_sigma_u2_fgls1,
             run_gls       = true,
             shrinkage     = fgls_shrinkage,
             project_spd   = fgls_project_spd,
@@ -129,6 +127,7 @@ function estimate_all(df::DataFrame;
             repeat_alpha  = rep_a_fgls2,
             repeat_gamma  = rep_g_fgls2,
             repeat_lambda = rep_l_fgls2,
+            subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
             run_gls       = true,
             shrinkage     = fgls_shrinkage,
             project_spd   = fgls_project_spd,
@@ -287,6 +286,9 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 # FGLS controls
                 rep_a_fgls=p.repeat_alpha_fgls, rep_g_fgls=p.repeat_gamma_fgls, rep_l_fgls=p.repeat_lambda_fgls,
                 rep_a_fgls2=p.repeat_alpha_fgls2, rep_g_fgls2=p.repeat_gamma_fgls2, rep_l_fgls2=p.repeat_lambda_fgls2,
+                subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
+                subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
+                # FGLS shrinkage
                 fgls_shrinkage=p.fgls_shrinkage,
                 fgls_project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
                 fgls_spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8),
@@ -296,8 +298,7 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 gls_shrinkage=p.gls_shrinkage,
                 gls_project_spd = (:gls_project_spd ∈ propertynames(p) ? p.gls_project_spd : false),
                 gls_spd_floor   = (:gls_spd_floor   ∈ propertynames(p) ? p.gls_spd_floor   : 1e-8),
-                sigma_u2_oracle=p.sigma_u^2,
-                sort_for_gls=true
+                sigma_u2_oracle=p.sigma_u^2
             )
 
             β_ols[r] = res.β_ols[2];  v_ols[r] = res.V_ols[2,2]
@@ -362,8 +363,8 @@ function mc_estimate_over_sizes(; params::NamedTuple,
             @printf("\n--- Results for Sample Size: %d (N2=%d, T=%d) ---\n", n, N2, T)
             @printf("Bias (OLS):                %.4f\n", bias_ols)
             @printf("Bias (OLS FE):             %.4f\n", bias_fe)
-            @printf("Bias (FGLS1 Arithmetic):   %.4f\n", bias_f1)
-            @printf("Bias (FGLS2 TwoStep):      %.4f\n", bias_f2)
+            @printf("Bias (FGLS1):              %.4f\n", bias_f1)
+            @printf("Bias (FGLS2):              %.4f\n", bias_f2)
             @printf("Bias (GLS):                %.4f\n", bias_g)
             @printf("Empirical Var (OLS):       %.4f\n", var_emp_ols)
             @printf("Empirical Var (OLS FE):    %.4f\n", var_emp_fe)

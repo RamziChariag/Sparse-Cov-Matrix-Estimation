@@ -56,47 +56,48 @@ function generate_dataset(;
     μj = fill(E_j, N2)
     μt = fill(E_t, T)
 
-    # --- fe_i draws ---
+    # --- fe_i draws: i fastest, then j, then t ---
     fe_i_tensor = zeros(Float64, N1, N2, T)
     if i_draw_mode == :draw_once
-        v = mvn_draw(μi, Ωi; rng=rng)
-        @inbounds for j in 1:N2, t in 1:T
-            fe_i_tensor[:, j, t] .= v
+        v = mvn_draw(μi, Ωi; rng=rng)          # length N1
+        @inbounds for t in 1:T, j in 1:N2, i in 1:N1
+            fe_i_tensor[i, j, t] = v[i]
         end
     elseif i_draw_mode == :mixed
         @inbounds for j in 1:N2
-            v = mvn_draw(μi, Ωi; rng=rng)
-            for t in 1:T
-                fe_i_tensor[:, j, t] .= v
+            v = mvn_draw(μi, Ωi; rng=rng)      # redraw per j
+            for t in 1:T, i in 1:N1
+                fe_i_tensor[i, j, t] = v[i]
             end
         end
     elseif i_draw_mode == :full_redraw
-        @inbounds for j in 1:N2, t in 1:T
-            fe_i_tensor[:, j, t] .= mvn_draw(μi, Ωi; rng=rng)
+        @inbounds for t in 1:T, j in 1:N2
+            v = mvn_draw(μi, Ωi; rng=rng)      # redraw per (j,t)
+            for i in 1:N1
+                fe_i_tensor[i, j, t] = v[i]
+            end
         end
     else
         error("Invalid i_draw_mode = $i_draw_mode")
     end
 
-    # --- fe_j draws ---
+    # --- fe_j draws: i fastest, then j, then t ---
     fe_j_tensor = zeros(Float64, N1, N2, T)
     if j_draw_mode == :draw_once
-        v = mvn_draw(μj, Ωj; rng=rng)
-        @inbounds for t in 1:T
-            for i in 1:N1, j in 1:N2
-                fe_j_tensor[i, j, t] = v[j]
-            end
+        v = mvn_draw(μj, Ωj; rng=rng)          # length N2
+        @inbounds for t in 1:T, j in 1:N2, i in 1:N1
+            fe_j_tensor[i, j, t] = v[j]
         end
     elseif j_draw_mode == :mixed
         @inbounds for t in 1:T
-            v = mvn_draw(μj, Ωj; rng=rng)
-            for i in 1:N1, j in 1:N2
-                fe_j_tensor[i, j, t] = v[j]   # constant across i within (j,t)
+            v = mvn_draw(μj, Ωj; rng=rng)      # redraw per t
+            for j in 1:N2, i in 1:N1
+                fe_j_tensor[i, j, t] = v[j]
             end
         end
     elseif j_draw_mode == :full_redraw
-        @inbounds for i in 1:N1, t in 1:T
-            v = mvn_draw(μj, Ωj; rng=rng)
+        @inbounds for t in 1:T, i in 1:N1
+            v = mvn_draw(μj, Ωj; rng=rng)      # redraw per (i,t)
             for j in 1:N2
                 fe_j_tensor[i, j, t] = v[j]
             end
@@ -105,23 +106,23 @@ function generate_dataset(;
         error("Invalid j_draw_mode = $j_draw_mode")
     end
 
-    # --- fe_t draws ---
+    # --- fe_t draws: i fastest, then j, then t ---
     fe_t_tensor = zeros(Float64, N1, N2, T)
     if t_draw_mode == :draw_once
-        v = mvn_draw(μt, Ωt; rng=rng)
-        @inbounds for i in 1:N1, j in 1:N2, t in 1:T
+        v = mvn_draw(μt, Ωt; rng=rng)          # length T
+        @inbounds for t in 1:T, j in 1:N2, i in 1:N1
             fe_t_tensor[i, j, t] = v[t]
         end
     elseif t_draw_mode == :mixed
         @inbounds for j in 1:N2
-            v = mvn_draw(μt, Ωt; rng=rng)
-            for i in 1:N1, t in 1:T
-                fe_t_tensor[i, j, t] = v[t]   # replicate across i, per j
+            v = mvn_draw(μt, Ωt; rng=rng)      # redraw per j
+            for t in 1:T, i in 1:N1
+                fe_t_tensor[i, j, t] = v[t]
             end
         end
     elseif t_draw_mode == :full_redraw
-        @inbounds for i in 1:N1, j in 1:N2
-            v = mvn_draw(μt, Ωt; rng=rng)
+        @inbounds for j in 1:N2, i in 1:N1
+            v = mvn_draw(μt, Ωt; rng=rng)      # redraw per (i,j)
             for t in 1:T
                 fe_t_tensor[i, j, t] = v[t]
             end
@@ -129,6 +130,7 @@ function generate_dataset(;
     else
         error("Invalid t_draw_mode = $t_draw_mode")
     end
+
 
     # Flatten tensors to vectors in (i fast, then j, then t) order
     to_vec(A) = vec(reshape(A, :, 1))

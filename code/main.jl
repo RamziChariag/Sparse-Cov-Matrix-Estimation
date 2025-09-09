@@ -104,6 +104,8 @@ function main()
             rep_a_fgls2     = p.repeat_alpha_fgls2,
             rep_g_fgls2     = p.repeat_gamma_fgls2,
             rep_l_fgls2     = p.repeat_lambda_fgls2,
+            subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
+            subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
             fgls_shrinkage  = p.fgls_shrinkage,
             fgls_project_spd= p.fgls_project_spd,
             fgls_spd_floor  = p.fgls_spd_floor,
@@ -115,8 +117,7 @@ function main()
             gls_shrinkage  = p.gls_shrinkage,
             gls_project_spd= p.gls_project_spd,
             gls_spd_floor  = p.gls_spd_floor,
-            sigma_u2_oracle= p.sigma_u^2,
-            sort_for_gls   = true
+            sigma_u2_oracle= p.sigma_u^2
         )
         RCEstimation.print_estimate_summary(res; beta_true=p.beta_true)
     end

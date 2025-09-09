@@ -19,17 +19,19 @@ const PARAMS = (;
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices (can differ from DGP) ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal σ²_α I
-    j_block_est = false,
+    j_block_est = true,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
+    subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
-    repeat_gamma_fgls2 = false,
+    repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
+    subtract_sigma_u2_fgls2 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor
@@ -37,7 +39,7 @@ const PARAMS = (;
 
     # --- GLS (oracle) controls ---
     repeat_alpha_gls = true,
-    repeat_gamma_gls = false,
+    repeat_gamma_gls = true,
     repeat_lambda_gls = false,
     gls_shrinkage    = 1.0,    # off-diag shrink; 1.0 = none
     gls_project_spd  = false,    # clip eigvals ≥ gls_spd_floor
@@ -49,10 +51,10 @@ const PARAMS = (;
 
     # --- DGP parameters ---
     # --- Panel sizes ---
-    N1 = 10,                       # i size (fixed across experiments)
-    start_N2 = 4, N2_increment = 4,
-    start_T  = 2, T_increment  = 2,
-    num_sample_sizes = 10,         # how many (N2,T) pairs to generate
+    N1 = 5,                       # i size (fixed across experiments)
+    start_N2 = 6, N2_increment = 1,
+    start_T  = 7, T_increment  = 2,
+    num_sample_sizes = 8,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
     num_reps = 300,                # reps per sample size
@@ -61,13 +63,13 @@ const PARAMS = (;
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
     i_block = true,
-    j_block = false,
+    j_block = true,
     t_block = false,
 
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
     i_draw_mode = :mixed,
-    j_draw_mode = :draw_once,
+    j_draw_mode = :mixed,
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---

@@ -196,6 +196,7 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
               j_block_est::Bool=true,
               t_block_est::Bool=true,
               repeat_alpha::Bool=false, repeat_gamma::Bool=false, repeat_lambda::Bool=false,
+              subtract_sigma_u2_fgls1::Bool=false,
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,            # keep your shrinkage if you pass it
               project_spd::Bool=false, spd_floor::Real=1e-8)
@@ -215,6 +216,7 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
         i_block_est=i_block_est,
         j_block_est=j_block_est,
         t_block_est=t_block_est,
+        subtract_sigma_u2 = subtract_sigma_u2_fgls1,
         two_step=false
     )
     Ωa, Ωg, Ωl = blocks.Ωa, blocks.Ωg, blocks.Ωl
@@ -264,6 +266,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               j_block_est::Bool=true,
               t_block_est::Bool=true,
               repeat_alpha::Bool=false, repeat_gamma::Bool=false, repeat_lambda::Bool=false,
+              subtract_sigma_u2_fgls2::Bool=false,
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,
               project_spd::Bool=false, spd_floor::Real=1e-8)
@@ -286,7 +289,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         t_block_est=t_block_est,
         two_step=true,
         return_sigma=true,
-        diag_subtract=false,
+        subtract_sigma_u2 = subtract_sigma_u2_fgls2,
         sigma_damp=1.0
     )
     Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
