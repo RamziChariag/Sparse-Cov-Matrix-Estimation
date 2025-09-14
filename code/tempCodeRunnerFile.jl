@@ -1,4 +1,5 @@
 # main.jl
+using Pkg
 using Random, LinearAlgebra, Distributions, DataFrames, Statistics, LaTeXStrings
 using Revise
 using JLD2

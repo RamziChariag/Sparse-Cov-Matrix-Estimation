@@ -105,7 +105,7 @@ function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
 end
 
 "Centered, Bessel-corrected mean of clusterwise outer products of length `block_size` chunks."
-function arithmetic_mean_outer_products_with_demeaning(resid::AbstractVector, block_size::Int)
+function arithmetic_mean_outer_products_without_demeaning(resid::AbstractVector, block_size::Int)
     n = length(resid)
     @assert n % block_size == 0
     m = div(n, block_size)
@@ -154,6 +154,40 @@ function two_step_mean_outer_products(resid::AbstractVector, component::Symbol,
         error("component must be :i, :j, or :t")
     end
 end 
+
+function two_step_mean_outer_products_with_demeaning(resid::AbstractVector, component::Symbol,
+                                      N1::Int, N2::Int, T::Int)
+
+    @assert length(resid) == N1 * N2 * T "resid length must be N1*N2*T"
+    @assert component === :i || component === :j || component === :t
+    A = reshape(resid, N1, N2, T)  # i, j, t
+
+    if component === :i
+        # Average across t to get N2 replicate i-vectors (columns = j)
+        X = dropdims(mean(A; dims=3), dims=3)           # N1×N2
+        μ = mean(X; dims=2)                             # N1×1 (mean across columns j)
+        Xc = X .- μ                                     # column-centered
+        @assert N2 ≥ 2 "Need at least 2 j-replicates for demeaning"
+        return (Xc * Xc') / (N2 - 1)
+
+    elseif component === :j
+        # Average across i to get T replicate j-vectors (columns = t)
+        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T
+        μ = mean(Y; dims=2)                             # N2×1 (mean across columns t)
+        Yc = Y .- μ
+        @assert T ≥ 2 "Need at least 2 t-replicates for demeaning"
+        return (Yc * Yc') / (T - 1)
+
+    else # component === :t
+        # Average across i to get N2 replicate t-vectors (columns = j after permute)
+        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T
+        W = permutedims(Y, (2, 1))                      # T×N2
+        μ = mean(W; dims=2)                             # T×1 (mean across columns j)
+        Wc = W .- μ
+        @assert N2 ≥ 2 "Need at least 2 j-replicates for demeaning"
+        return (Wc * Wc') / (N2 - 1)
+    end
+end
 
 "σ²_u and σ²_α/γ/λ via differences of within-residual means."
 function estimate_homoskedastic_component_variances(df::DataFrame, N1::Int, N2::Int, T::Int,
@@ -374,7 +408,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          sigma_damp::Real=1.0)
 
     if !two_step
-        # --- single-step procedure (unchanged) ---
+        # --- single-step procedure ---
         σu2 = sigmas.sigma_u2
 
         Ωa = 
@@ -515,7 +549,6 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     total_df = sum(dfw)
     σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
     σ2_u = max(σ2_u, 0.0)
-
 
     return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
 end

@@ -26,7 +26,7 @@ const PARAMS = (;
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
-    subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls1 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
     repeat_gamma_fgls2 = true,
@@ -51,13 +51,13 @@ const PARAMS = (;
 
     # --- DGP parameters ---
     # --- Panel sizes ---
-    N1 = 5,                       # i size (fixed across experiments)
-    start_N2 = 6, N2_increment = 1,
-    start_T  = 7, T_increment  = 2,
-    num_sample_sizes = 8,         # how many (N2,T) pairs to generate
+    N1 = 7,                       # i size (fixed across experiments)
+    start_N2 = 8, N2_increment = 1,
+    start_T  = 9, T_increment  = 1,
+    num_sample_sizes = 20,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
-    num_reps = 300,                # reps per sample size
+    num_reps = 1000,                # reps per sample size
     seed = 42,                     # global seed for reproducibility
 
     # --- Covariance structure toggles (per dimension) ---
