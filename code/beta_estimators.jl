@@ -2,6 +2,7 @@
 module RCBetaEstimators
 
 using LinearAlgebra, Statistics, DataFrames
+using Printf: @printf
 
 import ..RCOmegaEstimators
 
@@ -269,7 +270,11 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               subtract_sigma_u2_fgls2::Bool=false,
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,
-              project_spd::Bool=false, spd_floor::Real=1e-8)
+              project_spd::Bool=false, spd_floor::Real=1e-8,
+              # --- NEW (debug-only, safe defaults) ---
+              debug::Bool=false,
+              debug_truth::Union{Nothing,NamedTuple}=nothing,  # e.g., (Ωi_star=..., Ωj_star=..., Ωt_star=...)
+              debug_digits::Int=3)
 
     # 1) OLS for initial β̂
     β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
@@ -297,7 +302,48 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
     σ2_u = blocks.sigma_u2    
     #σ2_u = sigmas.sigma_u2
 
+     # ===== DEBUG PRINT (small blocks + sigma pieces) =====
+    if debug
+        io = IOContext(stdout, :limit=>false, :compact=>false)
 
+        # Accept multiple naming conventions for truth, if provided
+        Ωi_star = debug_truth === nothing ? nothing :
+                  get(debug_truth, :Ωi_star, get(debug_truth, :omega_alpha_star, nothing))
+        Ωj_star = debug_truth === nothing ? nothing :
+                  get(debug_truth, :Ωj_star, get(debug_truth, :omega_gamma_star, nothing))
+        Ωt_star = debug_truth === nothing ? nothing :
+                  get(debug_truth, :Ωt_star, get(debug_truth, :omega_lambda_star, nothing))
+
+        local function show_pair(name::AbstractString, A::AbstractMatrix, B)
+            io = IOContext(stdout, :limit=>false, :compact=>false)
+            println("→ $(name) (hat) vs $(name)★ (true):")
+            show(io, "text/plain", round.(Matrix(A); digits=debug_digits)); println()
+            if B !== nothing
+                show(io, "text/plain", round.(Matrix(B); digits=debug_digits)); println()
+                Δ = Matrix(A) .- Matrix(B)
+                println("   ‖Δ‖_F = ", norm(Δ),
+                        ",  max|Δ| = ", maximum(abs.(Δ)))
+            else
+                println("   (no truth provided for $(name)★)")
+            end
+            println()
+        end
+
+
+        println("\n========== FGLS2 diagnostics (small blocks) ==========")
+        show_pair("Ω_i", Ωi, Ωi_star)
+        show_pair("Ω_j", Ωj, Ωj_star)
+        show_pair("Ω_t", Ωt, Ωt_star)
+
+        println("σ (single-component pieces):")
+        # from estimate_homoskedastic_component_variances (NamedTuple)
+        @printf("   %-18s = %.6g\n", "sigma_alpha2", getfield(sigmas, :sigma_alpha2))
+        @printf("   %-18s = %.6g\n", "sigma_gamma2", getfield(sigmas, :sigma_gamma2))
+        @printf("   %-18s = %.6g\n", "sigma_lambda2", getfield(sigmas, :sigma_lambda2))
+        @printf("   %-18s = %.6g\n", "sigma_u2 (two-step pooled)", σ2_u)
+        println("======================================================\n")
+    end
+    # ===== END DEBUG PRINT =====
 
     # 4) Repeat expansion if requested
     if repeat_alpha;  Ωi = RCOmegaEstimators.repeat_block(Ωi, N2); end

@@ -78,8 +78,12 @@ function smoke_diagnosis!(; params::NamedTuple)
         run_gls   = false,
         shrinkage = p.fgls_shrinkage,
         project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
-        spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8)
-    )
+        spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8),
+        # --- debug only ---
+        debug=p.smoke_test_debug_print,
+        debug_truth=(; Ωi_star=Ωi_true, Ωj_star=Ωj_true, Ωt_star=Ωt_true),
+        debug_digits=3
+        )
 
     if do_plots
         mode_str2 = "blocks(i=$(p.i_block_est), j=$(p.j_block_est), t=$(p.t_block_est))"

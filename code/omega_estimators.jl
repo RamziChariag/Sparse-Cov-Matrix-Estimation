@@ -228,7 +228,7 @@ Estimator: raw moment (divide by the number of “other-dimension” combination
 function generate_single_component_omega(df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int,
                                          sigma_u2::Real, beta_hat::Real;
                                          x_col::Symbol=:x, y_col::Symbol=:y,
-                                         subtract_sigma_u2::Bool=false, do_ridge::Bool=false)
+                                         do_ridge::Bool=false)
 
     # Pick the residual suffix for the component (no sorting; use df as-is)
     suffix = component === :i ? "gamma_lambda" :
@@ -549,8 +549,9 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     total_df = sum(dfw)
     σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
     σ2_u = max(σ2_u, 0.0)
+    
 
-    return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
+    return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u, sigma_alpha2 = σ2α, sigma_gamma2 = σ2γ, sigma_lambda2 = σ2λ) : (; Ωa, Ωg, Ωl)
 end
 
 "Build Sα, Sγ, Sλ per your repeat rules (n × cols)."

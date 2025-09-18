@@ -19,7 +19,7 @@ const PARAMS = (;
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices (can differ from DGP) ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal σ²_α I
-    j_block_est = true,
+    j_block_est = false,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
@@ -29,7 +29,7 @@ const PARAMS = (;
     subtract_sigma_u2_fgls1 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
-    repeat_gamma_fgls2 = true,
+    repeat_gamma_fgls2 = false,
     repeat_lambda_fgls2 = false,
     subtract_sigma_u2_fgls2 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # --- FGLS shrinkage controls ---
@@ -39,15 +39,19 @@ const PARAMS = (;
 
     # --- GLS (oracle) controls ---
     repeat_alpha_gls = true,
-    repeat_gamma_gls = true,
+    repeat_gamma_gls = false,
     repeat_lambda_gls = false,
     gls_shrinkage    = 1.0,    # off-diag shrink; 1.0 = none
     gls_project_spd  = false,    # clip eigvals ≥ gls_spd_floor
     gls_spd_floor    = 1e-8,
 
     # --- Smoke Test Sample Size ---
-    smoke_test_size = 3,                # which sample size to use for smoke tests
+    smoke_test_size = 20,                # which sample size to use for smoke tests
     smoke_plot_omega_heatmaps = true,   # Show Ω percentile heatmaps in smoke diagnostics
+    print_omegas_post_dgp = false,    # print true Ω after DGP in smoke diagnostics
+    print_generated_data_head = false,   # how many rows of generated data to print in smoke test
+    generated_data_rows_to_check = 20,  # how many rows of generated data to check for invariance
+    smoke_test_debug_print = false,   # print extra debug info in smoke diagnostics
 
     # --- DGP parameters ---
     # --- Panel sizes ---
@@ -57,19 +61,19 @@ const PARAMS = (;
     num_sample_sizes = 20,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
-    num_reps = 1000,                # reps per sample size
+    num_reps = 500,                # reps per sample size
     seed = 42,                     # global seed for reproducibility
 
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
     i_block = true,
-    j_block = true,
+    j_block = false,
     t_block = false,
 
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
     i_draw_mode = :mixed,
-    j_draw_mode = :mixed,
+    j_draw_mode = :draw_once,
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---

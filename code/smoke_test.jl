@@ -37,11 +37,15 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, head::Int=10, s
         sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
         mu_x=p.mu_x, sigma_x=p.sigma_x,
         mu_u=p.mu_u, sigma_u=p.sigma_u,
+        print_omegas=p.print_omegas_post_dgp,
+        print_generated_data_head=p.print_generated_data_head,
         seed=p.seed
     )
 
-    println("\nHead of generated data:")
-    first(df, min(head, nrow(df))) |> println
+    if p.print_generated_data_head > 0
+        println("\nHead of generated data:")
+        first(df, min(p.generated_data_rows_to_check, nrow(df))) |> println
+    end
 
     println("\nChecking draw-mode invariances...")
     @assert assert_drawmode_invariance(df;
@@ -61,9 +65,11 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, head::Int=10, s
     println("Ω_i ≈ ", diagmean(meta.Ωi), "   Ω_j ≈ ", diagmean(meta.Ωj), "   Ω_t ≈ ", diagmean(meta.Ωt))
 
     # === Print the three Ω blocks ===
-    _print_omega("Ω_i", meta.Ωi)
-    _print_omega("Ω_j", meta.Ωj)
-    _print_omega("Ω_t", meta.Ωt)
+    if print_omegas
+        _print_omega("Ω_i (true)", meta.Ωi)
+        _print_omega("Ω_j (true)", meta.Ωj)
+        _print_omega("Ω_t (true)", meta.Ωt)
+    end
     
     if save
            sizes = (; N1 = p.N1, N2 = N2, T = T)
