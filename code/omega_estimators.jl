@@ -36,6 +36,36 @@ function make_psd_by_minimal_ridge(A::AbstractMatrix; strict::Bool=true, eps_rel
     return S
 end
 
+"""
+Subtract up to `delta` from each diagonal entry, but never so much that
+A[ii] falls below the sum of absolute off-diagonals in its column.
+
+Enforces:  A[ii] >= sum_{k != i} |A[k,i]|  (weak diagonal dominance).
+`margin` can enforce a tiny slack: A[ii] >= sum_offdiag + margin.
+Operates in-place and returns the same matrix.
+"""
+function diag_dominance_safe_subtract!(A::AbstractMatrix, delta::Real; margin::Real=10e-6)
+    @assert size(A,1) == size(A,2) "A must be square"
+    n = size(A,1)
+    @inbounds for i in 1:n
+        # sum of absolute off-diagonals in column i
+        s = 0.0
+        @inbounds for k in 1:n
+            if k != i
+                s += abs(A[k, i])
+            end
+        end
+        # maximum we are allowed to subtract at index i
+        cap = A[i,i] - (s + margin)
+        if cap > 0.0
+            di = min(delta, cap)
+            A[i,i] -= di
+        end
+        # if cap ≤ 0, we cannot subtract anything without breaking dominance
+    end
+    return A
+end
+
 "Repeat a covariance block along the diagonal `rep` times (kron(I(rep), Ω))."
 repeat_block(Ω::AbstractMatrix, rep::Integer) = kron(I(rep), Ω)
 
@@ -91,7 +121,7 @@ function residuals_from_suffix(df::DataFrame, suffix::AbstractString, beta_hat::
 end
 
 "Arithmetic mean of clusterwise outer products of length `block_size` chunks."
-function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
+function arithmetic_mean_outer_products_with_demeaning(resid::AbstractVector, block_size::Int)
     n = length(resid)
     @assert n % block_size == 0 "Residual length $n not divisible by block_size=$block_size"
     m = div(n, block_size)
@@ -105,7 +135,7 @@ function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
 end
 
 "Centered, Bessel-corrected mean of clusterwise outer products of length `block_size` chunks."
-function arithmetic_mean_outer_products_without_demeaning(resid::AbstractVector, block_size::Int)
+function arithmetic_mean_outer_products(resid::AbstractVector, block_size::Int)
     n = length(resid)
     @assert n % block_size == 0
     m = div(n, block_size)
@@ -139,8 +169,8 @@ function two_step_mean_outer_products(resid::AbstractVector, component::Symbol,
     A = reshape(resid, N1, N2, T)  # i, j, t
 
     if component === :i
-        X = dropdims(mean(A; dims=3), dims=3)           # N1×N2  (columns = j replicates)
-        return (X * X') / N2
+        X = dropdims(mean(A; dims=2), dims=2)           # N1×T  (columns = t replicates)
+        return (X * X') / T
 
     elseif component === :j
         Y = dropdims(mean(A; dims=1), dims=1)           # N2×T   (columns = t replicates)
@@ -155,37 +185,50 @@ function two_step_mean_outer_products(resid::AbstractVector, component::Symbol,
     end
 end 
 
+"""
+Two-step averaging with demeaning (Bessel-corrected).
+
+- For `:i`: average over j → X ∈ ℝ^{N1×T}. Demean across columns (t) and use /(T-1).
+- For `:j`: average over i → Y ∈ ℝ^{N2×T}. Demean across columns (t) and use /(T-1).
+- For `:t`: average over i → Y ∈ ℝ^{N2×T}, then W = Y' ∈ ℝ^{T×N2}.
+           Demean across columns (j) and use /(N2-1).
+
+If the replicate count is 1, falls back to a safe denominator of 1.
+Assumes `resid` ordered with i fastest, then j, then t.
+"""
 function two_step_mean_outer_products_with_demeaning(resid::AbstractVector, component::Symbol,
                                       N1::Int, N2::Int, T::Int)
 
-    @assert length(resid) == N1 * N2 * T "resid length must be N1*N2*T"
-    @assert component === :i || component === :j || component === :t
-    A = reshape(resid, N1, N2, T)  # i, j, t
-
+    @assert component in (:i, :j, :t)
     if component === :i
-        # Average across t to get N2 replicate i-vectors (columns = j)
-        X = dropdims(mean(A; dims=3), dims=3)           # N1×N2
-        μ = mean(X; dims=2)                             # N1×1 (mean across columns j)
-        Xc = X .- μ                                     # column-centered
-        @assert N2 ≥ 2 "Need at least 2 j-replicates for demeaning"
-        return (Xc * Xc') / (N2 - 1)
+        # res was built after sort_for_dim(df, :i) ⇒ i-fastest
+        # A[i, j, t], average over the constant dimension j
+        A = reshape(resid, N1, N2, T)              # [i, j, t]
+        X = dropdims(mean(A; dims=2), dims=2)      # N1 × T  (columns are t replicates)
+        μ = mean(X; dims=2)                        # N1 × 1
+        Xc = X .- μ
+        denom = max(T - 1, 1)
+        return (Xc * Xc') / denom
 
     elseif component === :j
-        # Average across i to get T replicate j-vectors (columns = t)
-        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T
-        μ = mean(Y; dims=2)                             # N2×1 (mean across columns t)
+        # res was built after sort_for_dim(df, :j) ⇒ j-fastest
+        # A[j, i, t], average over the constant dimension i
+        A = reshape(resid, N2, N1, T)              # [j, i, t]
+        Y = dropdims(mean(A; dims=2), dims=2)      # N2 × T  (columns are t replicates)
+        μ = mean(Y; dims=2)                        # N2 × 1
         Yc = Y .- μ
-        @assert T ≥ 2 "Need at least 2 t-replicates for demeaning"
-        return (Yc * Yc') / (T - 1)
+        denom = max(T - 1, 1)
+        return (Yc * Yc') / denom
 
-    else # component === :t
-        # Average across i to get N2 replicate t-vectors (columns = j after permute)
-        Y = dropdims(mean(A; dims=1), dims=1)           # N2×T
-        W = permutedims(Y, (2, 1))                      # T×N2
-        μ = mean(W; dims=2)                             # T×1 (mean across columns j)
-        Wc = W .- μ
-        @assert N2 ≥ 2 "Need at least 2 j-replicates for demeaning"
-        return (Wc * Wc') / (N2 - 1)
+    else  # component === :t
+        # res was built after sort_for_dim(df, :t) ⇒ t-fastest
+        # A[t, j, i], average over the constant dimension i, then permute so columns are j
+        A = reshape(resid, T, N2, N1)              # [t, j, i]
+        Z = dropdims(mean(A; dims=3), dims=3)      # T × N2  (columns are j replicates)
+        μ = mean(Z; dims=2)                        # T × 1
+        Zc = Z .- μ
+        denom = max(N2 - 1, 1)
+        return (Zc * Zc') / denom
     end
 end
 
@@ -258,6 +301,63 @@ function generate_single_component_omega(df::DataFrame, component::Symbol, N1::I
         (B * B') / (N1 * N2)
     end
 
+    return Ω
+end
+
+"""
+    generate_single_component_omega_with_demeaning(df, component, N1, N2, T, sigma_u2, beta_hat;
+                                                   x_col=:x, y_col=:y, do_ridge=false)
+
+Demeaned, Bessel-corrected version of `generate_single_component_omega`.
+
+- :i → B = reshape(A, N1, N2*T);  Ω_i = (B_c B_c') / (N2*T - 1)
+- :j → B = reshape(permutedims(A,(2,1,3)), N2, N1*T);  Ω_j = (B_c B_c') / (N1*T - 1)
+- :t → B = reshape(permutedims(A,(3,2,1)), T, N2*N1);   Ω_t = (B_c B_c') / (N1*N2 - 1)
+
+If the replicate count m is 1, falls back to denominator 1.
+Assumes rows of `df` are already ordered i-fastest, then j, then t.
+"""
+function generate_single_component_omega_with_demeaning(df::DataFrame, component::Symbol,
+                                                        N1::Int, N2::Int, T::Int,
+                                                        sigma_u2::Real, beta_hat::Real;
+                                                        x_col::Symbol=:x, y_col::Symbol=:y,
+                                                        do_ridge::Bool=false)
+
+    # Pick residual suffix (no sorting; use df as-is, i-fastest expected)
+    suffix = component === :i ? "gamma_lambda" :
+             component === :j ? "alpha_lambda" :
+             component === :t ? "alpha_gamma" :
+             error("component must be :i, :j, or :t")
+
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix])
+    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col)
+    @assert length(res) == N1 * N2 * T "Residual vector has wrong length."
+
+    # A[i,j,t] with i-fastest → j → t
+    A = reshape(res, N1, N2, T)
+
+    # Build B with component-specific row dimension and replicate columns
+    B = if component === :i
+        reshape(A, N1, N2*T)                       # rows = i, cols = (j,t)
+    elseif component === :j
+        reshape(permutedims(A, (2, 1, 3)), N2, N1*T)  # rows = j, cols = (i,t)
+    else # :t
+        reshape(permutedims(A, (3, 2, 1)), T, N2*N1)  # rows = t, cols = (j,i)
+    end
+
+    # Demean across columns (replicate dimension) and Bessel-correct
+    m = size(B, 2)                      # number of replicates
+    μ = mean(B; dims=2)                 # row means (column-wise mean vector)
+    Bc = B .- μ                         # broadcast across columns
+    denom = max(m - 1, 1)
+
+    Ω = (Bc * Bc') / denom              # unbiased sample covariance across replicates
+
+    if do_ridge
+        Ω = make_psd_by_minimal_ridge(Ω)  # from your helpers; returns Symmetric
+    else
+        Ω = Symmetric(Matrix(Ω))
+    end
     return Ω
 end
 
@@ -416,7 +516,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / T from diag
-                    @views Ωα[diagind(Ωα)] .-= sigma_damp * (σu2 / T)
+                    diag_dominance_safe_subtract!(Ωα, sigma_damp * σu2)
                 end
                 Symmetric(Matrix(Ωα))
             else
@@ -428,7 +528,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
-                    @views Ωγ[diagind(Ωγ)] .-= sigma_damp * (σu2 / N1)
+                    diag_dominance_safe_subtract!(Ωγ, sigma_damp * σu2)
                 end
                 Symmetric(Matrix(Ωγ))
             else
@@ -440,7 +540,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
-                    @views Ωλ[diagind(Ωλ)] .-= sigma_damp * (σu2 / N1)
+                    diag_dominance_safe_subtract!(Ωλ, sigma_damp * σu2)
                 end
                 Symmetric(Matrix(Ωλ))
             else
@@ -471,20 +571,20 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
         Ωα = two_step_mean_outer_products(res, :i, N1, N2, T)
 
-        # σ̂_{u,α}^2: avg sample variance across t within (i,j)
+        # σ̂_{u,α}^2: avg sample variance across j within (i,t)
         σsum = 0.0; cells = 0
-        if T > 1
-            A = reshape(res, N1, N2, T)
-            @inbounds for i in 1:N1, j in 1:N2
-                σsum += var_over_last(@view A[i, j, :])
+        if N2 > 1
+            A = reshape(res, N1, N2, T)                 # [i, j, t] (i fastest)
+            @inbounds for t in 1:T, i in 1:N1
+                σsum += var_over_last(@view A[i, :, t]) # variance across j
                 cells += 1
             end
         end
         σ2α = cells > 0 ? σsum / cells : 0.0
         push!(σ2_parts, max(σ2α, 0.0))
-        push!(dfw, (N1*N2)*max(T-1, 0))
+        push!(dfw, (N1*T)*max(N2-1, 0))
         if subtract_sigma_u2 && σ2α > 0
-            @views Ωα[diagind(Ωα)] .-= sigma_damp * (σ2α / T)
+            diag_dominance_safe_subtract!(Ωα, sigma_damp * (σ2α / T))
         end
         Symmetric(Matrix(Ωα))
     else
@@ -511,7 +611,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2γ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2γ > 0
-            @views Ωγ[diagind(Ωγ)] .-= sigma_damp * (σ2γ / N1)
+            diag_dominance_safe_subtract!(Ωγ, sigma_damp * (σ2γ / N1))
         end
         Symmetric(Matrix(Ωγ))
     else
@@ -538,7 +638,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2λ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2λ > 0
-            @views Ωλ[diagind(Ωλ)] .-= sigma_damp * (σ2λ / N1)
+            diag_dominance_safe_subtract!(Ωλ, sigma_damp * (σ2λ / N1))
         end
         Symmetric(Matrix(Ωλ))
     else
@@ -550,7 +650,6 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
     σ2_u = max(σ2_u, 0.0)
     
-
     return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u, sigma_alpha2 = σ2α, sigma_gamma2 = σ2γ, sigma_lambda2 = σ2λ) : (; Ωa, Ωg, Ωl)
 end
 
@@ -560,8 +659,8 @@ function make_S_matrices(N1::Int, N2::Int, T::Int;
     n = N1 * N2 * T
     # α
     Sα = repeat_alpha ?
-         kron(kron(ones(T,1), I(N2)), I(N1)) :
-         kron(kron(ones(T,1), ones(N2,1)), I(N1))
+         kron(kron(I(T), ones(N2,1)), I(N1)) :
+         kron(kron(ones(T, 1), ones(N2,1)), I(N1))
     @assert size(Sα,1) == n
     # γ
     Sγ = repeat_gamma ?
@@ -586,6 +685,7 @@ function construct_omega(Ωa::AbstractMatrix, Ωg::AbstractMatrix, Ωl::Abstract
     Ω .+= Sλ * Ωl * Sλ'
     Ω .+= sigma_u2 .* I(n)
     return Symmetric(Ω)  
+
 end
 
 function shrink_offdiagonal!(Ω::AbstractMatrix, α::Real)

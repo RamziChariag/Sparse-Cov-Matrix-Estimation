@@ -23,10 +23,14 @@ function _print_omega(name::AbstractString, Ω)
     println()
 end
 
-function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, head::Int=10, save::Bool=false, s::Int=1)
+function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, save::Bool=false, s::Int=1)
     p = params
     grid = _sample_size_grid(p)
-    N2, T = grid[s].N2, grid[s].T   #s is the sample size and can go from 1 to p.num_sample_sizes
+    s_eff = clamp(s, 1, length(grid))                           
+    if s_eff != s                                                
+    @info "smoke_test_size=$s out of range; using $s_eff (1..$(length(grid)))"
+    end
+    N2, T = grid[s_eff].N2, grid[s_eff].T    #s is the sample size and can go from 1 to p.num_sample_sizes
     println("Testing DGP with N1=$(p.N1), N2=$N2, T=$T, seed=$(p.seed)")
 
     df, meta = generate_dataset(
@@ -37,8 +41,6 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, head::Int=10, s
         sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
         mu_x=p.mu_x, sigma_x=p.sigma_x,
         mu_u=p.mu_u, sigma_u=p.sigma_u,
-        print_omegas=p.print_omegas_post_dgp,
-        print_generated_data_head=p.print_generated_data_head,
         seed=p.seed
     )
 
@@ -65,7 +67,7 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, head::Int=10, s
     println("Ω_i ≈ ", diagmean(meta.Ωi), "   Ω_j ≈ ", diagmean(meta.Ωj), "   Ω_t ≈ ", diagmean(meta.Ωt))
 
     # === Print the three Ω blocks ===
-    if print_omegas
+    if p.print_omegas_post_dgp
         _print_omega("Ω_i (true)", meta.Ωi)
         _print_omega("Ω_j (true)", meta.Ωj)
         _print_omega("Ω_t (true)", meta.Ωt)

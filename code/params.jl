@@ -19,19 +19,19 @@ const PARAMS = (;
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices (can differ from DGP) ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal σ²_α I
-    j_block_est = false,
+    j_block_est = true,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
-    subtract_sigma_u2_fgls1 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
-    repeat_gamma_fgls2 = false,
+    repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
-    subtract_sigma_u2_fgls2 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls2 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor
@@ -39,14 +39,14 @@ const PARAMS = (;
 
     # --- GLS (oracle) controls ---
     repeat_alpha_gls = true,
-    repeat_gamma_gls = false,
+    repeat_gamma_gls = true,
     repeat_lambda_gls = false,
     gls_shrinkage    = 1.0,    # off-diag shrink; 1.0 = none
     gls_project_spd  = false,    # clip eigvals ≥ gls_spd_floor
     gls_spd_floor    = 1e-8,
 
     # --- Smoke Test Sample Size ---
-    smoke_test_size = 20,                # which sample size to use for smoke tests
+    smoke_test_size = 1,                # which sample size to use for smoke tests
     smoke_plot_omega_heatmaps = true,   # Show Ω percentile heatmaps in smoke diagnostics
     print_omegas_post_dgp = false,    # print true Ω after DGP in smoke diagnostics
     print_generated_data_head = false,   # how many rows of generated data to print in smoke test
@@ -55,10 +55,10 @@ const PARAMS = (;
 
     # --- DGP parameters ---
     # --- Panel sizes ---
-    N1 = 7,                       # i size (fixed across experiments)
-    start_N2 = 8, N2_increment = 1,
-    start_T  = 9, T_increment  = 1,
-    num_sample_sizes = 20,         # how many (N2,T) pairs to generate
+    N1 = 5,                       # i size (fixed across experiments)
+    start_N2 = 7, N2_increment = 0,
+    start_T  = 8, T_increment  = 5,
+    num_sample_sizes = 12,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
     num_reps = 500,                # reps per sample size
@@ -67,13 +67,13 @@ const PARAMS = (;
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
     i_block = true,
-    j_block = false,
+    j_block = true,
     t_block = false,
 
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
     i_draw_mode = :mixed,
-    j_draw_mode = :draw_once,
+    j_draw_mode = :mixed,
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---
@@ -104,7 +104,7 @@ const PARAMS = (;
 
     # Which *size index* to use for the distribution plots (1-based).
     # If you omit this param, we'll fall back to `smoke_test_size`.
-    plot_dist_size_index = 6,
+    plot_dist_size_index = 3,
 
     # Which estimators to use in plots (strings matched case-insensitively)
     plot_dist_estimators = ["FGLS1","FGLS2"],

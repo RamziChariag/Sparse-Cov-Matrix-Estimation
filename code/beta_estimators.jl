@@ -226,7 +226,7 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
     Sα, Sγ, Sλ = RCOmegaEstimators.make_S_matrices(
         N1, N2, T; repeat_alpha=repeat_alpha, repeat_gamma=repeat_gamma, repeat_lambda=repeat_lambda)
 
-    if repeat_alpha; Ωa = RCOmegaEstimators.repeat_block(Ωa, N2); end
+    if repeat_alpha; Ωa = RCOmegaEstimators.repeat_block(Ωa, T); end
     if repeat_gamma; Ωg = RCOmegaEstimators.repeat_block(Ωg, T);  end
     if repeat_lambda; Ωl = RCOmegaEstimators.repeat_block(Ωl, N2); end
 
@@ -302,7 +302,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
     σ2_u = blocks.sigma_u2    
     #σ2_u = sigmas.sigma_u2
 
-     # ===== DEBUG PRINT (small blocks + sigma pieces) =====
+         # ===== DEBUG PRINT (small blocks + sigma pieces) =====
     if debug
         io = IOContext(stdout, :limit=>false, :compact=>false)
 
@@ -346,7 +346,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
     # ===== END DEBUG PRINT =====
 
     # 4) Repeat expansion if requested
-    if repeat_alpha;  Ωi = RCOmegaEstimators.repeat_block(Ωi, N2); end
+    if repeat_alpha;  Ωi = RCOmegaEstimators.repeat_block(Ωi, T); end
     if repeat_gamma;  Ωj = RCOmegaEstimators.repeat_block(Ωj, T);  end
     if repeat_lambda; Ωt = RCOmegaEstimators.repeat_block(Ωt, N2); end
 
@@ -357,6 +357,15 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
 
     # 6) Assemble Ω with σ̂_u^2 I
     Ω̂ = RCOmegaEstimators.construct_omega(Ωi, Ωj, Ωt, Sα, Sγ, Sλ, σ2_u)
+
+    if debug
+        println("\n========== FGLS2 diagnostics (full Ω̂) ==========")
+        @info "diag Ω̂ (mean)" mean(diag(Ω̂))
+        @info "σ2_u used" σ2_u
+        @info "trace α/γ/λ parts" (tr(Sα*Ωi*Sα'), tr(Sγ*Ωj*Sγ'), tr(Sλ*Ωt*Sλ'))
+
+        println("======================================================\n")
+    end
 
     # 7) Optional shrinkage / SPD floor/projection
     if shrinkage != 1.0
@@ -405,7 +414,7 @@ function oracle_gls(df::DataFrame,
 
     # Expand blocks if repeating
     if repeat_alpha
-        Ωa = RCOmegaEstimators.repeat_block(Ωa, N2)   # repeat along j
+        Ωa = RCOmegaEstimators.repeat_block(Ωa, T)   # repeat along t
     end
     if repeat_gamma
         Ωg = RCOmegaEstimators.repeat_block(Ωg, T)    # repeat along t

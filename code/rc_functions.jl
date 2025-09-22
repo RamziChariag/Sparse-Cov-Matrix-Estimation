@@ -55,7 +55,7 @@ function assert_drawmode_invariance(df::DataFrame;
     if i_draw_mode == :draw_once
         @assert constant_within(df, [:i], :fe_i) "i:draw_once failed (fe_i not constant across j,t for each i)"
     elseif i_draw_mode == :mixed
-        @assert constant_within(df, [:i, :j], :fe_i) "i:mixed failed (fe_i not constant over t for each (i,j))"
+        @assert constant_within(df, [:i, :t], :fe_i) "i:mixed failed (fe_i not constant over j for each (i,t))"
     elseif i_draw_mode == :full_redraw
         # no constraint
     else

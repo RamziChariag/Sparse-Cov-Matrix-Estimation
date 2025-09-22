@@ -102,7 +102,7 @@ function smoke_diagnosis!(; params::NamedTuple)
         repeat_lambda= p.repeat_lambda_gls
     )
     Ωa, Ωg, Ωl = Ωi_true, Ωj_true, Ωt_true
-    if p.repeat_alpha_gls; Ωa = RCOmegaEstimators.repeat_block(Ωa, N2); end
+    if p.repeat_alpha_gls; Ωa = RCOmegaEstimators.repeat_block(Ωa, T); end
     if p.repeat_gamma_gls; Ωg = RCOmegaEstimators.repeat_block(Ωg, T);  end
     if p.repeat_lambda_gls; Ωl = RCOmegaEstimators.repeat_block(Ωl, N2); end
 
