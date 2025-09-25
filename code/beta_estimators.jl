@@ -357,6 +357,8 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
 
     # 6) Assemble Ω with σ̂_u^2 I
     Ω̂ = RCOmegaEstimators.construct_omega(Ωi, Ωj, Ωt, Sα, Sγ, Sλ, σ2_u)
+    
+         # ===== DEBUG PRINT (full Ω̂ diagnostics) =====
 
     if debug
         println("\n========== FGLS2 diagnostics (full Ω̂) ==========")

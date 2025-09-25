@@ -17,8 +17,8 @@ const PARAMS = (;
     cluster_col_fe  = nothing,  # e.g., :i or nothing
 
     # --- FGLS controls ---
-    # --- Estimation-side Ω block choices (can differ from DGP) ---
-    i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal σ²_α I
+    # --- Estimation-side Ω block choices ---
+    i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
     j_block_est = true,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
@@ -26,12 +26,12 @@ const PARAMS = (;
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
-    subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls1 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
     repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
-    subtract_sigma_u2_fgls2 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls2 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor
@@ -48,20 +48,20 @@ const PARAMS = (;
     # --- Smoke Test Sample Size ---
     smoke_test_size = 1,                # which sample size to use for smoke tests
     smoke_plot_omega_heatmaps = true,   # Show Ω percentile heatmaps in smoke diagnostics
-    print_omegas_post_dgp = false,    # print true Ω after DGP in smoke diagnostics
+    print_omegas_post_dgp = true,    # print true Ω after DGP in smoke diagnostics
     print_generated_data_head = false,   # how many rows of generated data to print in smoke test
     generated_data_rows_to_check = 20,  # how many rows of generated data to check for invariance
     smoke_test_debug_print = false,   # print extra debug info in smoke diagnostics
 
     # --- DGP parameters ---
     # --- Panel sizes ---
-    N1 = 5,                       # i size (fixed across experiments)
-    start_N2 = 7, N2_increment = 0,
+    N1 = 4,                       # i size (fixed across experiments)
+    start_N2 = 5, N2_increment = 0,
     start_T  = 8, T_increment  = 5,
-    num_sample_sizes = 12,         # how many (N2,T) pairs to generate
+    num_sample_sizes = 10,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
-    num_reps = 500,                # reps per sample size
+    num_reps = 200,                # reps per sample size
     seed = 42,                     # global seed for reproducibility
 
     # --- Covariance structure toggles (per dimension) ---
@@ -77,9 +77,9 @@ const PARAMS = (;
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---
-    E_i = 3.0,
-    E_j = 3.0,
-    E_t = 3.0,
+    E_i = 0.0,
+    E_j = 0.0,
+    E_t = 0.0,
 
     # --- Scale parameters used to set variances ---
     # For homoskedastic diagonal: Var = sigma_*^2
