@@ -1,6 +1,6 @@
 module RCEstimation
 
-using DataFrames, LinearAlgebra, Statistics, ProgressMeter
+using DataFrames, LinearAlgebra, Statistics, ProgressMeter, Random
 using Printf: @printf
 
 import ..RCDGP
@@ -236,6 +236,16 @@ function mc_estimate_over_sizes(; params::NamedTuple,
         N1 = p.N1; N2 = sz.N2; T = sz.T
         n  = N1 * N2 * T
 
+        # --- Draw Ω once per size and reuse across reps ---
+        rng_Ω = MersenneTwister(p.seed + 1_000_000*idx)
+        Ωi_fixed, Ωj_fixed, Ωt_fixed = RCDGP.build_cov_mats(
+            N1, N2, T;
+            i_block=p.i_block, j_block=p.j_block, t_block=p.t_block,
+            sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
+            rng=rng_Ω
+        )
+        # -------------------------------------------------------
+
         # possibly override reps if a bundle of this size is provided
         local_datasets = bundle === nothing ? nothing : bundle[idx]
         reps_here = bundle === nothing ? reps :
@@ -260,6 +270,7 @@ function mc_estimate_over_sizes(; params::NamedTuple,
             df = nothing; Ωi_true=nothing; Ωj_true=nothing; Ωt_true=nothing
             if bundle === nothing
                 seed_r = p.seed + 10_000*idx + r
+                # --- changed: pass fixed Ω into generate_dataset ---
                 df, meta = RCDGP.generate_dataset(
                     N1=N1, N2=N2, T=T,
                     i_block=p.i_block, j_block=p.j_block, t_block=p.t_block,
@@ -268,9 +279,10 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                     sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
                     mu_x=p.mu_x, sigma_x=p.sigma_x,
                     mu_u=p.mu_u, sigma_u=p.sigma_u,
-                    seed=seed_r
+                    seed=seed_r,
+                    Ωi_fixed=Ωi_fixed, Ωj_fixed=Ωj_fixed, Ωt_fixed=Ωt_fixed
                 )
-                Ωi_true, Ωj_true, Ωt_true = meta.Ωi, meta.Ωj, meta.Ωt
+                Ωi_true, Ωj_true, Ωt_true = Ωi_fixed, Ωj_fixed, Ωt_fixed
             else
                 d = local_datasets isa Vector ? local_datasets[r] : local_datasets
                 df = d.df; Ωi_true, Ωj_true, Ωt_true = d.Ωi, d.Ωj, d.Ωt

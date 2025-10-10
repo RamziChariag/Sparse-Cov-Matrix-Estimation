@@ -36,7 +36,10 @@ function generate_dataset(;
         sigma_i::Real, sigma_j::Real, sigma_t::Real,
         mu_x::Real, sigma_x::Real,
         mu_u::Real, sigma_u::Real,
-        seed::Integer = 42
+        seed::Integer = 42,
+        Ωi_fixed::Union{Nothing,AbstractMatrix}=nothing,
+        Ωj_fixed::Union{Nothing,AbstractMatrix}=nothing,
+        Ωt_fixed::Union{Nothing,AbstractMatrix}=nothing
     )
 
     rng = MersenneTwister(seed)
@@ -45,11 +48,15 @@ function generate_dataset(;
     # IDs
     i_vec, j_vec, t_vec = build_ids(N1, N2, T)
 
-    # Covariance matrices
-    Ωi, Ωj, Ωt = build_cov_mats(N1,N2,T;
-        i_block=i_block, j_block=j_block, t_block=t_block,
-        sigma_i=sigma_i, sigma_j=sigma_j, sigma_t=sigma_t,
-        rng=rng)
+    # Covariance matrices (use fixed if provided)
+    Ωi, Ωj, Ωt = if (Ωi_fixed === nothing) || (Ωj_fixed === nothing) || (Ωt_fixed === nothing)
+        build_cov_mats(N1,N2,T;
+            i_block=i_block, j_block=j_block, t_block=t_block,
+            sigma_i=sigma_i, sigma_j=sigma_j, sigma_t=sigma_t,
+            rng=rng)
+    else
+        (Ωi_fixed, Ωj_fixed, Ωt_fixed)
+    end
 
     # FE means
     μi = fill(E_i, N1)

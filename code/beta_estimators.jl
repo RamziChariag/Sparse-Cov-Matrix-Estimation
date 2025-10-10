@@ -271,7 +271,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,
               project_spd::Bool=false, spd_floor::Real=1e-8,
-              # --- NEW (debug-only, safe defaults) ---
+              # --- debug-only ---
               debug::Bool=false,
               debug_truth::Union{Nothing,NamedTuple}=nothing,  # e.g., (Ωi_star=..., Ωj_star=..., Ωt_star=...)
               debug_digits::Int=3)
@@ -294,8 +294,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         t_block_est=t_block_est,
         two_step=true,
         return_sigma=true,
-        subtract_sigma_u2 = subtract_sigma_u2_fgls2,
-        sigma_damp=1.0
+        subtract_sigma_u2 = subtract_sigma_u2_fgls2
     )
     Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
     # This uses pooled σ̂_u^2 from two-step (not per-dim σ̂²_u)
@@ -314,26 +313,33 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         Ωt_star = debug_truth === nothing ? nothing :
                   get(debug_truth, :Ωt_star, get(debug_truth, :omega_lambda_star, nothing))
 
-        local function show_pair(name::AbstractString, A::AbstractMatrix, B)
+        local function show_difference(name::AbstractString, A::AbstractMatrix, B)
             io = IOContext(stdout, :limit=>false, :compact=>false)
             println("→ $(name) (hat) vs $(name)★ (true):")
-            show(io, "text/plain", round.(Matrix(A); digits=debug_digits)); println()
-            if B !== nothing
-                show(io, "text/plain", round.(Matrix(B); digits=debug_digits)); println()
-                Δ = Matrix(A) .- Matrix(B)
-                println("   ‖Δ‖_F = ", norm(Δ),
-                        ",  max|Δ| = ", maximum(abs.(Δ)))
-            else
+
+            A_m = Matrix(A)
+            show(io, "text/plain", round.(A_m; digits=debug_digits)); println()
+
+            if B === nothing
                 println("   (no truth provided for $(name)★)")
+                println()
+                return
             end
+
+            B_m = Matrix(B)
+            show(io, "text/plain", round.(B_m; digits=debug_digits)); println()
+
+            Δ = A_m .- B_m
+            println("   Δ = (hat − true):")
+            show(io, "text/plain", round.(Δ; digits=debug_digits)); println()
             println()
         end
 
 
         println("\n========== FGLS2 diagnostics (small blocks) ==========")
-        show_pair("Ω_i", Ωi, Ωi_star)
-        show_pair("Ω_j", Ωj, Ωj_star)
-        show_pair("Ω_t", Ωt, Ωt_star)
+        show_difference("Ω_i", Ωi, Ωi_star)
+        show_difference("Ω_j", Ωj, Ωj_star)
+        show_difference("Ω_t", Ωt, Ωt_star)
 
         println("σ (single-component pieces):")
         # from estimate_homoskedastic_component_variances (NamedTuple)
@@ -363,6 +369,13 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
     if debug
         println("\n========== FGLS2 diagnostics (full Ω̂) ==========")
         @info "diag Ω̂ (mean)" mean(diag(Ω̂))
+        @info "diag Ω̂i (mean)" mean(diag(Ωi))
+        @info "diag Ω̂i★ (mean)" mean(diag(Ωi_star))
+        @info "diag Ω̂j (mean)" mean(diag(Ωj))
+        @info "diag Ω̂j★ (mean)" mean(diag(Ωj_star))
+        @info "diag Ω̂t (mean)" mean(diag(Ωt))
+        @info "diag Ω̂t★ (mean)" mean(diag(Ωt_star))
+        @info "trace Ω̂" tr(Ω̂)
         @info "σ2_u used" σ2_u
         @info "trace α/γ/λ parts" (tr(Sα*Ωi*Sα'), tr(Sγ*Ωj*Sγ'), tr(Sλ*Ωt*Sλ'))
 

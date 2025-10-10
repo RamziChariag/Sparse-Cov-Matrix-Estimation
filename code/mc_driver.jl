@@ -28,7 +28,6 @@ returns that path. Always returns the in-memory `bundle`.
 """
 function run_mc!(; params::NamedTuple = RCParams.PARAMS, save::Bool=true)
     grid = _sample_size_grid(params)
-
     println("== Running Monte Carlo (sizes=$(params.num_sample_sizes), reps=$(params.num_reps)) ==")
 
     bundle = Vector{Vector{NamedTuple}}(undef, length(grid))
@@ -38,11 +37,23 @@ function run_mc!(; params::NamedTuple = RCParams.PARAMS, save::Bool=true)
         N  = params.N1 * N2 * T
         R  = params.num_reps
 
-        # Preallocate storage for all reps of this size
+        # ---------- Draw Ω once per size ----------
+        # Use a deterministic seed for Ω at this size so reruns are stable
+        rng_Ω = MersenneTwister(hash((params.seed, :OMEGA, k, N2, T)))
+        Ωi_fix, Ωj_fix, Ωt_fix = RCDGP.build_cov_mats(
+            params.N1, N2, T;
+            i_block=params.i_block, j_block=params.j_block, t_block=params.t_block,
+            sigma_i=params.sigma_i, sigma_j=params.sigma_j, sigma_t=params.sigma_t,
+            rng=rng_Ω
+        )
+        # ------------------------------------------------
+
         sims_k = Vector{NamedTuple}(undef, R)
 
         Threads.@threads for r in 1:R
-            seed_r = hash((params.seed, k, N2, T, r))
+            # Different seed for *data* (x, FE, u) each rep, but Ω is fixed
+            seed_r = hash((params.seed, :DATA, k, N2, T, r))
+
             df, meta = RCDGP.generate_dataset(
                 N1=params.N1, N2=N2, T=T,
                 i_block=params.i_block, j_block=params.j_block, t_block=params.t_block,
@@ -51,15 +62,19 @@ function run_mc!(; params::NamedTuple = RCParams.PARAMS, save::Bool=true)
                 sigma_i=params.sigma_i, sigma_j=params.sigma_j, sigma_t=params.sigma_t,
                 mu_x=params.mu_x, sigma_x=params.sigma_x,
                 mu_u=params.mu_u, sigma_u=params.sigma_u,
-                seed=seed_r
+                seed=seed_r,
+                # ---------- NEW: pin Ω across reps ----------
+                Ωi_fixed=Ωi_fix, Ωj_fixed=Ωj_fix, Ωt_fixed=Ωt_fix
+                # --------------------------------------------
             )
-            sims_k[r] = (; df=df, Ωi=meta.Ωi, Ωj=meta.Ωj, Ωt=meta.Ωt,
+
+            # Store the fixed Ω in every rep for clarity/reproducibility
+            sims_k[r] = (; df=df, Ωi=Ωi_fix, Ωj=Ωj_fix, Ωt=Ωt_fix,
                           sizes=(; N1=params.N1, N2=N2, T=T))
         end
 
         bundle[k] = sims_k
-        println("Sample Size $(N): done")
-        flush(stdout)
+        println("Sample Size $(N): done"); flush(stdout)
     end
 
     if save

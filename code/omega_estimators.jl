@@ -490,7 +490,7 @@ Two-step (two_step=true):
     then average matrices.
   - Computes a df-weighted pooled σ̂_u^2 from per-cell sample variances across
     the repeated dimension.
-  - Subtracts (sigma_damp * σ̂_u^2 / R) from the diagonal of each estimated
+  - Subtracts (σ̂_u^2 / R) from the diagonal of each estimated
     base block BEFORE any SPD projection/repeats.
   - If `return_sigma=true`, also returns the pooled σ̂_u^2.
 
@@ -504,8 +504,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          t_block_est::Bool=true,
                          two_step::Bool=false,
                          return_sigma::Bool=false,
-                         subtract_sigma_u2::Bool=true,
-                         sigma_damp::Real=1.0)
+                         subtract_sigma_u2::Bool=true)
 
     if !two_step
         # --- single-step procedure ---
@@ -516,7 +515,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / T from diag
-                    diag_dominance_safe_subtract!(Ωα, sigma_damp * σu2)
+                    diag_dominance_safe_subtract!(Ωα, σu2 / T)
                 end
                 Symmetric(Matrix(Ωα))
             else
@@ -528,7 +527,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
-                    diag_dominance_safe_subtract!(Ωγ, sigma_damp * σu2)
+                    diag_dominance_safe_subtract!(Ωγ, σu2 / N1)
                 end
                 Symmetric(Matrix(Ωγ))
             else
@@ -540,7 +539,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
-                    diag_dominance_safe_subtract!(Ωλ, sigma_damp * σu2)
+                    diag_dominance_safe_subtract!(Ωλ, σu2 / N1)
                 end
                 Symmetric(Matrix(Ωλ))
             else
@@ -584,7 +583,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2α, 0.0))
         push!(dfw, (N1*T)*max(N2-1, 0))
         if subtract_sigma_u2 && σ2α > 0
-            diag_dominance_safe_subtract!(Ωα, sigma_damp * (σ2α / T))
+            diag_dominance_safe_subtract!(Ωα, σ2α / T)
         end
         Symmetric(Matrix(Ωα))
     else
@@ -611,7 +610,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2γ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2γ > 0
-            diag_dominance_safe_subtract!(Ωγ, sigma_damp * (σ2γ / N1))
+            diag_dominance_safe_subtract!(Ωγ, σ2γ / N1)
         end
         Symmetric(Matrix(Ωγ))
     else
@@ -638,7 +637,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2λ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2λ > 0
-            diag_dominance_safe_subtract!(Ωλ, sigma_damp * (σ2λ / N1))
+            diag_dominance_safe_subtract!(Ωλ, σ2λ / N1)
         end
         Symmetric(Matrix(Ωλ))
     else
