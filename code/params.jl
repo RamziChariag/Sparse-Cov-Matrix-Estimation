@@ -1,5 +1,4 @@
 # params.jl
-# All configuration in one spot.
 
 module RCParams
 
@@ -26,12 +25,12 @@ const PARAMS = (;
     repeat_alpha_fgls = false,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
-    subtract_sigma_u2_fgls1 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
     repeat_alpha_fgls2 = true,
     repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
-    subtract_sigma_u2_fgls2 = false,  # whether to subtract σ²_u from diagonals of Ω estimates
+    subtract_sigma_u2_fgls2 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor
@@ -46,22 +45,22 @@ const PARAMS = (;
     gls_spd_floor    = 1e-8,
 
     # --- Smoke Test Sample Size ---
-    smoke_test_size = 9,                # which sample size to use for smoke tests
-    smoke_plot_omega_heatmaps = false,   # Show Ω percentile heatmaps in smoke diagnostics
-    print_omegas_post_dgp = false,    # print true Ω after DGP in smoke diagnostics
-    print_generated_data_head = false,   # how many rows of generated data to print in smoke test
-    generated_data_rows_to_check = 20,  # how many rows of generated data to check for invariance
-    smoke_test_debug_print = true,   # print extra debug info in smoke diagnostics
+    smoke_test_size = 2,                    # which sample size to use for smoke tests
+    smoke_plot_omega_heatmaps = false,       # Show Ω percentile heatmaps in smoke diagnostics
+    print_omegas_post_dgp = false,           # print true Ω after DGP in smoke diagnostics
+    print_generated_data_head = false,      # how many rows of generated data to print in smoke test
+    generated_data_rows_to_check = 20,      # how many rows of generated data to check for invariance
+    smoke_test_debug_print = false,         # print extra debug info in smoke diagnostics
 
     # --- DGP parameters ---
     # --- Panel sizes ---
-    N1 = 4,                       # i size (fixed across experiments)
-    start_N2 = 5, N2_increment = 0,
-    start_T  = 8, T_increment  = 5,
+    N1 = 3,                       # i size (fixed across experiments)
+    start_N2 = 4, N2_increment = 0,
+    start_T  = 5, T_increment  = 4,
     num_sample_sizes = 10,         # how many (N2,T) pairs to generate
 
     # --- Monte Carlo ---
-    num_reps = 200,                # reps per sample size
+    num_reps = 1000,                # reps per sample size
     seed = 42,                     # global seed for reproducibility
 
     # --- Covariance structure toggles (per dimension) ---
@@ -73,7 +72,7 @@ const PARAMS = (;
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
     i_draw_mode = :mixed,
-    j_draw_mode = :mixed,
+    j_draw_mode = :draw_once,
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---
@@ -89,8 +88,8 @@ const PARAMS = (;
     sigma_t = 10.0,
 
     # --- X and U ---
-    mu_x = 3.0,  sigma_x = 1.0,
-    mu_u = 0.0,  sigma_u = 3.0,
+    mu_x = 3.0,  sigma_x = 10.0,
+    mu_u = 0.0,  sigma_u = 1.0,
 
     # --- Plotting controls ---
     # If you comment this line out, plotting will use the default Plots.jl theme.

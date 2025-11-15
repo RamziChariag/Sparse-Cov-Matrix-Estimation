@@ -213,8 +213,8 @@ function two_step_mean_outer_products_with_demeaning(resid::AbstractVector, comp
     elseif component === :j
         # res was built after sort_for_dim(df, :j) ⇒ j-fastest
         # A[j, i, t], average over the constant dimension i
-        A = reshape(resid, N2, N1, T)              # [j, i, t]
-        Y = dropdims(mean(A; dims=2), dims=2)      # N2 × T  (columns are t replicates)
+        A = reshape(resid, N1, N2, T)            # [j, i, t]
+        Y = dropdims(mean(A; dims=1), dims=1)      # N2 × T  (columns are t replicates)
         μ = mean(Y; dims=2)                        # N2 × 1
         Yc = Y .- μ
         denom = max(T - 1, 1)
@@ -223,8 +223,8 @@ function two_step_mean_outer_products_with_demeaning(resid::AbstractVector, comp
     else  # component === :t
         # res was built after sort_for_dim(df, :t) ⇒ t-fastest
         # A[t, j, i], average over the constant dimension i, then permute so columns are j
-        A = reshape(resid, T, N2, N1)              # [t, j, i]
-        Z = dropdims(mean(A; dims=3), dims=3)      # T × N2  (columns are j replicates)
+        A = reshape(resid, N1, N2, T)               # [t, j, i]
+        Z = dropdims(mean(A; dims=1), dims=1)      # T × N2  (columns are j replicates)
         μ = mean(Z; dims=2)                        # T × 1
         Zc = Z .- μ
         denom = max(N2 - 1, 1)
@@ -435,49 +435,6 @@ function two_step_sigma_u(res::AbstractVector{<:Real}, component::Symbol, N1::In
 end
 
 """
-generate_single_component_omega_twostep(df, component, N1, N2, T; x_col, y_col, beta_hat, return_sigma=false)
-
-Build the two-step block Ω_component AND (optionally) return (σ̂2_component, R_component, df_weight_component)
-computed from the same residuals used for the two-step averaging.
-
-If return_sigma=false (default) → returns Ω
-If return_sigma=true          → returns (Ω, σ̂2_component, R_component, df_weight_component)
-"""
-function generate_single_component_omega_twostep(
-    df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int;
-    x_col::Symbol, y_col::Symbol, beta_hat::Real, return_sigma::Bool=false
-)
-    # Always sort rows so that i is fastest in the flattened vector:
-    dfo = sort(df, [:t, :j, :i])
-
-    if component === :i
-        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-        res = residuals_from_suffix(dfo, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
-
-    elseif component === :j
-        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-        res = residuals_from_suffix(dfo, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
-
-    elseif component === :t
-        ensure_tilde_columns!(dfo; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-        res = residuals_from_suffix(dfo, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
-
-    else
-        error("Unknown component: $component")
-    end
-
-    Ω = two_step_mean_outer_products(res, component, N1, N2, T)
-
-    if return_sigma
-        σ2, R, dfw = two_step_sigma_u(res, component, N1, N2, T)
-        return (Ω, σ2, R, dfw)
-    else
-        return Ω
-    end
-end
-
-
-"""
 Estimate base blocks (Ωα, Ωγ, Ωλ) using per-dimension switches.
 
 Single-step (two_step=false):
@@ -552,7 +509,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # =========================
     # Two-step path (FGLS2)
     # =========================
-
+    
     # Accumulators for pooled σ̂_u^2
     σ2_parts = Float64[]   # component-specific σ̂_u^2
     dfw      = Int[]       # df weights used for pooling
@@ -564,7 +521,8 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
     # i / α : mean over t for each (i,j); outer product averaged over j
     Ωa = if i_block_est
-        dfi = sort_for_dim(df, :i)
+        dfi = df
+        #dfi = sort_for_dim(df, :i)
         ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
         res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
@@ -573,7 +531,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         # σ̂_{u,α}^2: avg sample variance across j within (i,t)
         σsum = 0.0; cells = 0
         if N2 > 1
-            A = reshape(res, N1, N2, T)                 # [i, j, t] (i fastest)
+            A = reshape(res, N1, N2, T)  # [i, j, t]
             @inbounds for t in 1:T, i in 1:N1
                 σsum += var_over_last(@view A[i, :, t]) # variance across j
                 cells += 1
@@ -583,7 +541,7 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         push!(σ2_parts, max(σ2α, 0.0))
         push!(dfw, (N1*T)*max(N2-1, 0))
         if subtract_sigma_u2 && σ2α > 0
-            diag_dominance_safe_subtract!(Ωα, σ2α / T)
+            diag_dominance_safe_subtract!(Ωα, σ2α / N2)
         end
         Symmetric(Matrix(Ωα))
     else
@@ -592,7 +550,8 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
     # j / γ : mean over i for each (j,t); outer product averaged over t
     Ωg = if j_block_est
-        dfj = sort_for_dim(df, :j)
+        dfj = df
+        #dfj = sort_for_dim(df, :j)
         ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
         res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
@@ -600,9 +559,9 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
         σsum = 0.0; cells = 0
         if N1 > 1
-            A = reshape(res, N2, N1, T)  # [j, i, t]
+            A = reshape(res, N1, N2, T)  # [i, j, t]
             @inbounds for t in 1:T, j in 1:N2
-                σsum += var_over_last(@view A[j, :, t])  # variance across i
+                σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (j,t)
                 cells += 1
             end
         end
@@ -619,7 +578,8 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
     # t / λ : mean over i for each (t,j); outer product averaged over j
     Ωl = if t_block_est
-        dft = sort_for_dim(df, :t)
+        dft = df
+        #dft = sort_for_dim(df, :t)
         ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
         res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
 
@@ -627,12 +587,13 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
         σsum = 0.0; cells = 0
         if N1 > 1
-            A = reshape(res, T, N2, N1)  # [t, j, i]
+            A = reshape(res, N1, N2, T)  # [i, j, t]
             @inbounds for t in 1:T, j in 1:N2
-                σsum += var_over_last(@view A[t, j, :])  # variance across i
+                σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (t,j)
                 cells += 1
             end
         end
+
         σ2λ = cells > 0 ? σsum / cells : 0.0
         push!(σ2_parts, max(σ2λ, 0.0))
         push!(dfw, (N2*T)*max(N1-1, 0))

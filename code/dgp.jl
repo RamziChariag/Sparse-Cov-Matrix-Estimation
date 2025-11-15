@@ -72,7 +72,7 @@ function generate_dataset(;
         end
 elseif i_draw_mode == :mixed
     @inbounds for t in 1:T
-        v = mvn_draw(μi, Ωi; rng=rng)      # redraw per t (repeat across j)
+        v = mvn_draw(μi, Ωi; rng=rng)      # redraw per t 
         for j in 1:N2, i in 1:N1
             fe_i_tensor[i, j, t] = v[i]
         end

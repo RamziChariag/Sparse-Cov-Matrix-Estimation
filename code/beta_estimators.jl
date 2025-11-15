@@ -276,6 +276,9 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               debug_truth::Union{Nothing,NamedTuple}=nothing,  # e.g., (Ωi_star=..., Ωj_star=..., Ωt_star=...)
               debug_digits::Int=3)
 
+    # 0) Sort data with i fastest, then j then t
+    df = RCOmegaEstimators.sort_for_dim(df, :i)  
+
     # 1) OLS for initial β̂
     β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
 
