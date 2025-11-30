@@ -58,11 +58,20 @@ function smoke_diagnosis!(; params::NamedTuple)
     if do_plots
         mode_str = "blocks(i=$(p.i_block_est), j=$(p.j_block_est), t=$(p.t_block_est))"
         ttl1 = latexstring("\$\\mathrm{FGLS1}\\ \\hat{\\Omega}_{\\mathrm{$mode_str}}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_fgls),\\ \\gamma=$(p.repeat_gamma_fgls),\\ \\lambda=$(p.repeat_lambda_fgls)\$")
-        display(RCPlotting.plot_matrix_percentile(Ω̂; title=ttl1))
+        heatmap1 = RCPlotting.plot_matrix_percentile(Ω̂; title=ttl1)
+        display(heatmap1)
+
+        if p.save_heatmap_plots
+            # fgls1
+            path1 = RCIO.plot_path_omega_heatmap(p; estimator="fgls1")
+            println("Saving FGLS1 Ω̂ heatmap to $path1")
+            RCPlotting.savefig_heatmap!(heatmap1, p; estimator="fgls1")
+        end
     end
-    sum1, ext1 = RCPlotting.omega_eigen_tables(Ω̂; k=10)
-    println("\n[FGLS1] eigenvalue summary:"); println(sum1)
-    println("\n[FGLS1] smallest/largest:");   println(ext1)
+
+    #sum1, ext1 = RCPlotting.omega_eigen_tables(Ω̂; k=10)
+    #println("\n[FGLS1] eigenvalue summary:"); println(sum1)
+    #println("\n[FGLS1] smallest/largest:");   println(ext1)
 
     # --- FGLS2 Ω̂₂ (no GLS run) ---
     _, _, _, Ω̂2 = RCBetaEstimators.fgls2(
@@ -88,7 +97,15 @@ function smoke_diagnosis!(; params::NamedTuple)
     if do_plots
         mode_str2 = "blocks(i=$(p.i_block_est), j=$(p.j_block_est), t=$(p.t_block_est))"
         ttl2f = latexstring("\$\\mathrm{FGLS2}\\ \\hat{\\Omega}_{\\mathrm{$mode_str2}}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_fgls2),\\ \\gamma=$(p.repeat_gamma_fgls2),\\ \\lambda=$(p.repeat_lambda_fgls2)\$")
-        display(RCPlotting.plot_matrix_percentile(Ω̂2; title=ttl2f))
+        heatmap2 = RCPlotting.plot_matrix_percentile(Ω̂2; title=ttl2f)
+        display(heatmap2)
+
+        if p.save_heatmap_plots
+            # fgls2
+            path2 = RCIO.plot_path_omega_heatmap(p; estimator="fgls2")
+            println("Saving FGLS2 Ω̂ heatmap to $path2")
+            RCPlotting.savefig_heatmap!(heatmap2, p; estimator="fgls2")
+        end
     end
     sum2f, ext2f = RCPlotting.omega_eigen_tables(Ω̂2; k=10)
     println("\n[FGLS2] eigenvalue summary:"); println(sum2f)
@@ -118,7 +135,16 @@ function smoke_diagnosis!(; params::NamedTuple)
 
     if do_plots
         ttl3 = latexstring("\$\\mathrm{Oracle}\\ \\Omega^{\\star}\\ \\mid\\ \\mathrm{rep}\\ \\alpha=$(p.repeat_alpha_gls),\\ \\gamma=$(p.repeat_gamma_gls),\\ \\lambda=$(p.repeat_lambda_gls)\$")
-        display(RCPlotting.plot_matrix_percentile(Ωstar; title=ttl3))
+        heatmap3 = RCPlotting.plot_matrix_percentile(Ωstar; title=ttl3)
+        display(heatmap3)
+
+        if p.save_heatmap_plots
+            # oracle
+            path3 = RCIO.plot_path_omega_heatmap(p; estimator="gls")
+            println("Saving Oracle Ω★ heatmap to $path3")
+            RCPlotting.savefig_heatmap!(heatmap3, p; estimator="gls")  
+        end
+
     end
     sum3, ext3 = RCPlotting.omega_eigen_tables(Ωstar; k=10)
     println("\n[GLS] eigenvalue summary:"); println(sum3)

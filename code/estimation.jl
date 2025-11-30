@@ -63,6 +63,7 @@ function estimate_all(df::DataFrame;
     rep_a_fgls::Bool=false, rep_g_fgls::Bool=false, rep_l_fgls::Bool=false,
     rep_a_fgls2::Bool=false, rep_g_fgls2::Bool=false, rep_l_fgls2::Bool=false,
     subtract_sigma_u2_fgls1::Bool=false, subtract_sigma_u2_fgls2::Bool=false,
+    iterate_fgls2::Bool=false,
     fgls_shrinkage::Real=1.0, fgls_project_spd::Bool=false, fgls_spd_floor::Real=1e-8,
 
     # Oracle GLS (pass true blocks to enable)
@@ -116,28 +117,44 @@ function estimate_all(df::DataFrame;
     end
 
     # 3b) FGLS2
+    # 3b) FGLS2 
     β_fgls2 = nothing; e_fgls2 = nothing; V_fgls2 = nothing; Ωhat2 = nothing; se_fgls2 = nothing
     try
-        β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.fgls2(
-            df_gls, N1, N2, T;
-            x_col=:x, y_col=:y,
-            i_block_est = i_block_est,
-            j_block_est = j_block_est,
-            t_block_est = t_block_est,
-            repeat_alpha  = rep_a_fgls2,
-            repeat_gamma  = rep_g_fgls2,
-            repeat_lambda = rep_l_fgls2,
-            subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
-            run_gls       = true,
-            shrinkage     = fgls_shrinkage,
-            project_spd   = fgls_project_spd,
-            spd_floor     = fgls_spd_floor
-        )
+        if iterate_fgls2
+            β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.ifgls2(
+                df_gls, N1, N2, T;
+                x_col=:x, y_col=:y,
+                i_block_est = i_block_est,
+                j_block_est = j_block_est,
+                t_block_est = t_block_est,
+                repeat_alpha  = rep_a_fgls2,
+                repeat_gamma  = rep_g_fgls2,
+                repeat_lambda = rep_l_fgls2,
+                subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
+                run_gls       = true,
+                shrinkage     = fgls_shrinkage,
+                project_spd   = fgls_project_spd,
+                spd_floor     = fgls_spd_floor
+            )
+        else
+            β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.fgls2(
+                df_gls, N1, N2, T;
+                x_col=:x, y_col=:y,
+                i_block_est = i_block_est,
+                j_block_est = j_block_est,
+                t_block_est = t_block_est,
+                repeat_alpha  = rep_a_fgls2,
+                repeat_gamma  = rep_g_fgls2,
+                repeat_lambda = rep_l_fgls2,
+                subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
+                run_gls       = true,
+                shrinkage     = fgls_shrinkage,
+                project_spd   = fgls_project_spd,
+                spd_floor     = fgls_spd_floor
+            )
+        end
     catch err
         @warn "FGLS2 failed" exception=(err, catch_backtrace()) n=nrow(df) p=ncol(df) N1=N1 N2=N2 T=T
-    end
-    if V_fgls2 !== nothing
-        se_fgls2 = sqrt.(max.(diag(V_fgls2), 0))
     end
 
     # 4) Oracle GLS (if true small blocks provided)
@@ -300,6 +317,7 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 rep_a_fgls2=p.repeat_alpha_fgls2, rep_g_fgls2=p.repeat_gamma_fgls2, rep_l_fgls2=p.repeat_lambda_fgls2,
                 subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
                 subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
+                iterate_fgls2 = p.iterate_fgls2,
                 # FGLS shrinkage
                 fgls_shrinkage=p.fgls_shrinkage,
                 fgls_project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),

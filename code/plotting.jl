@@ -10,7 +10,7 @@ export plot_matrix_percentile, omega_eigen_tables,
        block_eigen_summary, block_eigen_table,
        apply_plot_theme!, sample_sizes_from_results,
        plot_estimator_distribution, plot_asymptotic, plot_multi_variance, plot_variance_ratio,
-       savefig_distribution!, savefig_asymptotic!, savefig_multi_variance!, savefig_variance_ratio!,
+       savefig_distribution!,savefig_heatmap!, savefig_asymptotic!, savefig_multi_variance!, savefig_variance_ratio!,
        make_result_plots
 
 "Percentile heatmap of a matrix (Spectral colormap, no ticks)."
@@ -94,6 +94,7 @@ function block_eigen_table(Ωa::AbstractMatrix, Ωg::AbstractMatrix, Ωl::Abstra
     dfl = DataFrame(block = fill("lambda", length(el)), idx = eachindex(el), eig = el)
     return vcat(dfa, dfg, dfl)
 end
+
 # ---- Theme ----
 "Apply a plotting theme; e.g. :ggplot2, :default, :gruvboxdark, etc."
 function apply_plot_theme!(theme_sym::Union{Nothing,Symbol})
@@ -367,6 +368,9 @@ end
 # ---- Saving wrappers (use RCIO naming) ----
 savefig_distribution!(plt, params; estimator::AbstractString, sample_n::Integer) =
     savefig(plt, RCIO.plot_path_estimator_dist(params; estimator=estimator, sample_n=sample_n))
+
+savefig_heatmap!(plt, params; estimator::AbstractString) =
+    savefig(plt, RCIO.plot_path_omega_heatmap(params; estimator=estimator))
 
 savefig_asymptotic!(plt, params; choice::Symbol) =
     savefig(plt, RCIO.plot_path_asymptotic(params; choice=choice))

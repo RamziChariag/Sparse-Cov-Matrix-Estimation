@@ -10,7 +10,7 @@ export build_output_basename, output_dir, output_path,
        save_mc_bundle!, load_mc_bundle, block_est_dimcode,
        estimation_results_path, save_estimation_results!,
        load_estimation_results,
-       plots_dir_for_results, ensure_plots_dir!, results_basename,
+       plots_dir_for_results, ensure_plots_dir!, results_basename, plot_path_omega_heatmap,
        plot_path_estimator_dist, plot_path_asymptotic, plot_path_multi_variance, plot_path_variance_ratio
 
 "Build base filename according to your rules."
@@ -253,6 +253,14 @@ results_basename(params::NamedTuple) = splitext(basename(estimation_results_path
 
 # make a tidy, filesystem-safe slug (e.g., 'OLS FE' -> 'ols_fe')
 _slug(s::AbstractString) = lowercase(replace(s, r"[^A-Za-z0-9]+" => "_"))
+
+"…/<results base>/omega_<estimator>.png"
+function plot_path_omega_heatmap(params::NamedTuple; estimator::AbstractString)
+    dir  = ensure_plots_dir!(params)
+    base = results_basename(params)
+    est  = _slug(estimator)
+    return joinpath(dir, string(base, "_omega_", est, ".png"))
+end
 
 "…/<results base>/ <base>_<estimator>_<n>_beta_hat_dist.png"
 function plot_path_estimator_dist(params::NamedTuple; estimator::AbstractString, sample_n::Integer)

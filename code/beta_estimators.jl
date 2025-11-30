@@ -156,6 +156,7 @@ end
 
 "GLS on a DataFrame: uses a given full Ω (n×n). Includes intercept like raw OLS."
 function gls(df::DataFrame, Ω::AbstractMatrix; x_col::Symbol=:x, y_col::Symbol=:y)
+
     n = nrow(df)
     x = df[!, x_col]
     X = hcat(ones(eltype(x), n), x)   # intercept + x
@@ -406,6 +407,154 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
 
     β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col)
     return β̂_fgls, ê, V̂, Ω̂
+end
+
+"""
+    ifgls2(df, N1, N2, T; kwargs...)
+
+Iterated FGLS2 (IFGLS2) using the same two-step Ω-block construction as `fgls2`,
+but recomputing Ω̂ and GLS in a loop until convergence.
+
+Inputs mirror `fgls2`, plus a few iteration controls:
+
+- max_iter::Int = 10
+- tol::Real = 1e-6
+- use_slope_tol::Bool = true   # if true, convergence based on slope only (β[2])
+
+Returns: (β̂_ifgls2, ê, V̂_ifgls2, Ω̂), or (nothing, nothing, nothing, Ω̂) if `run_gls=false`.
+"""
+function ifgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
+    x_col::Symbol = :x, y_col::Symbol = :y,
+    i_block_est::Bool = true,
+    j_block_est::Bool = true,
+    t_block_est::Bool = true,
+    repeat_alpha::Bool = false,
+    repeat_gamma::Bool = false,
+    repeat_lambda::Bool = false,
+    subtract_sigma_u2_fgls2::Bool = false,
+    run_gls::Bool = true,
+    print_omega::Bool = false,
+    shrinkage::Real = 1.0,
+    project_spd::Bool = false,
+    spd_floor::Real = 1e-8,
+    # iteration controls
+    max_iter::Int = 10,
+    tol::Real = 1e-6,
+    use_slope_tol::Bool = true
+)
+
+    # 0) Sort once: i fastest (same as in fgls2)
+    df = RCOmegaEstimators.sort_for_dim(df, :i)
+    n  = nrow(df)
+
+    # 1) Initial OLS β̂ (same start as fgls2)
+    β̂_ols, _, _ = ols(df; x_col = x_col, y_col = y_col, vcov = :none)
+
+    # Helper: one-shot FGLS2-style Ω̂ construction given a slope β₂
+    function build_omega_hat(df, β2::Real)
+        # (a) homoskedastic pieces at this β2
+        sigmas = RCOmegaEstimators.estimate_homoskedastic_component_variances(
+            df, N1, N2, T, β2; x_col = x_col, y_col = y_col
+        )
+
+        # (b) two-step Ω-blocks using this β2
+        blocks = RCOmegaEstimators.estimate_omegas(
+            df, N1, N2, T, sigmas, β2;
+            x_col        = x_col,
+            i_block_est  = i_block_est,
+            j_block_est  = j_block_est,
+            t_block_est  = t_block_est,
+            two_step     = true,
+            return_sigma = true,
+            subtract_sigma_u2 = subtract_sigma_u2_fgls2
+        )
+
+        Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
+        σ2_u       = blocks.sigma_u2
+
+        # (c) optional repeat expansion
+        if repeat_alpha
+            Ωi = RCOmegaEstimators.repeat_block(Ωi, T)
+        end
+        if repeat_gamma
+            Ωj = RCOmegaEstimators.repeat_block(Ωj, T)
+        end
+        if repeat_lambda
+            Ωt = RCOmegaEstimators.repeat_block(Ωt, N2)
+        end
+
+        # (d) S-matrices
+        Sα, Sγ, Sλ = RCOmegaEstimators.make_S_matrices(
+            N1, N2, T;
+            repeat_alpha = repeat_alpha,
+            repeat_gamma = repeat_gamma,
+            repeat_lambda = repeat_lambda
+        )
+
+        # (e) full Ω̂ with σ̂_u^2 I
+        Ω̂_local = RCOmegaEstimators.construct_omega(Ωi, Ωj, Ωt, Sα, Sγ, Sλ, σ2_u)
+
+        # (f) shrinkage / SPD projection
+        if shrinkage != 1.0
+            Ω̂_local = RCOmegaEstimators.shrink_offdiagonal!(Ω̂_local, shrinkage)
+        end
+        if project_spd
+            Ω̂_local = RCOmegaEstimators.project_to_spd(Ω̂_local; floor = spd_floor)
+        end
+
+        return Ω̂_local
+    end
+
+    # ---- Case 1: only want Ω̂, no GLS ----
+    if !run_gls
+        Ω̂ = build_omega_hat(df, β̂_ols[2])
+        if print_omega
+            io = IOContext(stdout, :limit => false, :compact => false)
+            println("\nΩ̂ (", size(Ω̂, 1), "×", size(Ω̂, 2), "):")
+            show(io, "text/plain", Matrix(Ω̂))
+            println()
+        end
+        return nothing, nothing, nothing, Ω̂
+    end
+
+    # ---- Case 2: full IFGLS loop ----
+    β_curr = copy(β̂_ols)
+    β_new  = similar(β_curr)
+    ê     = zeros(n)
+    V̂     = zeros(2, 2)
+    Ω̂     = Matrix{Float64}(I, n, n)
+
+    converged = false
+
+    for iter in 1:max_iter
+        # Build Ω̂ given current slope
+        Ω̂ = build_omega_hat(df, β_curr[2])
+
+        if print_omega
+            io = IOContext(stdout, :limit => false, :compact => false)
+            println("\nΩ̂ (", size(Ω̂, 1), "×", size(Ω̂, 2), ") at iter = ", iter, ":")
+            show(io, "text/plain", Matrix(Ω̂))
+            println()
+        end
+
+        # GLS step
+        β_new, e_new, V_new = gls(df, Ω̂; x_col = x_col, y_col = y_col)
+
+        # convergence metric
+        Δ = use_slope_tol ? abs(β_new[2] - β_curr[2]) : norm(β_new .- β_curr)
+
+        β_curr .= β_new
+        ê     .= e_new
+        V̂     .= V_new
+
+        if Δ < tol
+            converged = true
+            break
+        end
+    end
+
+    # (We could log `converged` somewhere, but we keep the same output as fgls2)
+    return β_curr, ê, V̂, Ω̂
 end
 
 

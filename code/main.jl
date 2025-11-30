@@ -105,6 +105,7 @@ function main()
             rep_l_fgls2     = p.repeat_lambda_fgls2,
             subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
             subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
+            iterate_fgls2   = p.iterate_fgls2,
             fgls_shrinkage  = p.fgls_shrinkage,
             fgls_project_spd= p.fgls_project_spd,
             fgls_spd_floor  = p.fgls_spd_floor,
