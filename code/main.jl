@@ -24,10 +24,10 @@ function main()
     DO_SAVE_SMOKE  = get(ENV, "SAVE_SMOKE", "1") == "1"         # save smoke test results
     DO_SMOKE_DIAG  = get(ENV, "RC_SMOKE_DIAG", "1") == "1"      # run smoke test diagnostics
     DO_TEST_RUN    = get(ENV, "DO_TEST_RUN", "1") == "1"        # run test estimation
-    DO_MC          = get(ENV, "RC_MC", "1") == "1"              # run DGP
-    DO_ESTIMATE    = get(ENV, "RC_ESTIMATE", "1") == "1"        # run full estimation
-    DO_SAVE_ESTIMATION = get(ENV, "RC_SAVE_EST", "1") == "1"    # save estimation results, if we ran it
-    DO_MAKE_PLOTS      = get(ENV, "RC_PLOTS", "1") == "1"       # create simulation results plots
+    DO_MC          = get(ENV, "RC_MC", "0") == "1"              # run DGP
+    DO_ESTIMATE    = get(ENV, "RC_ESTIMATE", "0") == "1"        # run full estimation
+    DO_SAVE_ESTIMATION = get(ENV, "RC_SAVE_EST", "0") == "1"    # save estimation results, if we ran it
+    DO_MAKE_PLOTS      = get(ENV, "RC_PLOTS", "0") == "1"       # create simulation results plots
     # ------------------------------------------
 
     p = RCParams.PARAMS

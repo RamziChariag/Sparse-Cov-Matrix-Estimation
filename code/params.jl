@@ -5,7 +5,7 @@ module RCParams
 export PARAMS
 
 const PARAMS = (; 
-
+  
     # --- Estimation parameters ---
     beta_true = 2.0,          # true β used to form y
     c_true    = 0.0,          # true constant in y-generation
@@ -17,7 +17,7 @@ const PARAMS = (;
 
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices ---
-    i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
+    i_block_est = false,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
     j_block_est = false,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
@@ -67,7 +67,7 @@ const PARAMS = (;
 
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
-    i_block = true,
+    i_block = false,
     j_block = false,
     t_block = false,
 

@@ -302,8 +302,8 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
     )
     Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
     # This uses pooled σ̂_u^2 from two-step (not per-dim σ̂²_u)
-    σ2_u = blocks.sigma_u2    
-    #σ2_u = sigmas.sigma_u2
+    #σ2_u = blocks.sigma_u2    
+    σ2_u = sigmas.sigma_u2
 
          # ===== DEBUG PRINT (small blocks + sigma pieces) =====
     if debug
