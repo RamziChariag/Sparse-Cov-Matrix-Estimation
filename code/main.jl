@@ -93,6 +93,8 @@ function main()
             beta_true = p.beta_true, c_true = p.c_true,
             vcov_ols = p.vcov_ols, vcov_fe = p.vcov_fe,
             cluster_col_ols = p.cluster_col_ols, cluster_col_fe = p.cluster_col_fe,
+            # OLS FE
+            fe_alphaT = p.fe_alphaT, fe_gammaT = p.fe_gammaT, fe_lambdaJ = p.fe_lambdaJ,
             # FGLS (estimation-side Ω choices)
             i_block_est = p.i_block_est,
             j_block_est = p.j_block_est,
@@ -105,7 +107,6 @@ function main()
             rep_l_fgls2     = p.repeat_lambda_fgls2,
             subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
             subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
-            iterate_fgls2   = p.iterate_fgls2,
             fgls_shrinkage  = p.fgls_shrinkage,
             fgls_project_spd= p.fgls_project_spd,
             fgls_spd_floor  = p.fgls_spd_floor,

@@ -15,6 +15,16 @@ const PARAMS = (;
     cluster_col_ols = nothing,  # e.g., :i or nothing
     cluster_col_fe  = nothing,  # e.g., :i or nothing
 
+    # --- FE controls ---
+    # Default FE is three-way (:i, :j, :t).
+    # If toggled, replace the corresponding FE with an interaction FE:
+    #   i  -> it   (alphaT)
+    #   j  -> jt   (gammaT)
+    #   t  -> jt   (lambdaJ)
+    fe_alphaT  = false,
+    fe_gammaT  = false,
+    fe_lambdaJ = false,
+
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
@@ -31,7 +41,6 @@ const PARAMS = (;
     repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
     subtract_sigma_u2_fgls2 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
-    iterate_fgls2 = false,            # whether to do multiple FGLS2 iterations (not just one-shot)
     # --- FGLS shrinkage controls ---
     fgls_shrinkage   = 1.0,     # off-diag shrink (1.0 = none)
     fgls_project_spd = false,   # clip eigvals ≥ fgls_spd_floor

@@ -58,19 +58,23 @@ function estimate_all(df::DataFrame;
     cluster_col_ols::Union{Nothing,Symbol}=nothing,
     cluster_col_fe::Union{Nothing,Symbol}=nothing,
 
+    # OLS FE
+    fe_alphaT::Bool=false,
+    fe_gammaT::Bool=false,
+    fe_lambdaJ::Bool=false,
+
     # FGLS (estimation-side Ω choices)
     i_block_est::Bool=true, j_block_est::Bool=false, t_block_est::Bool=false,
     rep_a_fgls::Bool=false, rep_g_fgls::Bool=false, rep_l_fgls::Bool=false,
     rep_a_fgls2::Bool=false, rep_g_fgls2::Bool=false, rep_l_fgls2::Bool=false,
     subtract_sigma_u2_fgls1::Bool=false, subtract_sigma_u2_fgls2::Bool=false,
-    iterate_fgls2::Bool=false,
     fgls_shrinkage::Real=1.0, fgls_project_spd::Bool=false, fgls_spd_floor::Real=1e-8,
 
     # Oracle GLS (pass true blocks to enable)
     Ωi_star::Union{Nothing,AbstractMatrix}=nothing,
     Ωj_star::Union{Nothing,AbstractMatrix}=nothing,
     Ωt_star::Union{Nothing,AbstractMatrix}=nothing,
-    rep_a_gls::Bool=true, rep_g_gls::Bool=false, rep_l_gls::Bool=false,
+    rep_a_gls::Bool=false, rep_g_gls::Bool=false, rep_l_gls::Bool=false,
     gls_shrinkage::Real=1.0, gls_project_spd::Bool=false, gls_spd_floor::Real=1e-8,
     sigma_u2_oracle::Real=1.0,
 )
@@ -80,11 +84,17 @@ function estimate_all(df::DataFrame;
     # 1) OLS (raw, with intercept)
     β_ols, e_ols, V_ols = RCBetaEstimators.ols(df; x_col=:x, y_col=:y,
                                               vcov=vcov_ols, cluster_col=cluster_col_ols)
-    se_ols = sqrt.(max.(diag(V_ols), 0))  # guard print
+    se_ols = sqrt.(max.(diag(V_ols), 0))  
 
-    # 2) FE-OLS (within i,j,t; no intercept)
+    # 2) FE-OLS (default: i+j+t; optionally swap in interaction FEs)
+    fe_group_vars = Symbol[
+        fe_alphaT  ? :alphaT  : :i,
+        fe_gammaT  ? :gammaT  : :j,
+        fe_lambdaJ ? :lambdaJ : :t,
+    ]
+
     β_fe, e_fe, V_fe = RCBetaEstimators.fe_ols(df; x_col=:x, y_col=:y,
-                                               group_vars=[:i,:j,:t],
+                                               group_vars=fe_group_vars,
                                                vcov=vcov_fe, cluster_col=cluster_col_fe)
     se_fe = sqrt.(max.(diag(V_fe), 0))
 
@@ -119,39 +129,21 @@ function estimate_all(df::DataFrame;
     # 3b) FGLS2 
     β_fgls2 = nothing; e_fgls2 = nothing; V_fgls2 = nothing; Ωhat2 = nothing; se_fgls2 = nothing
     try
-        if iterate_fgls2
-            β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.ifgls2(
-                df_gls, N1, N2, T;
-                x_col=:x, y_col=:y,
-                i_block_est = i_block_est,
-                j_block_est = j_block_est,
-                t_block_est = t_block_est,
-                repeat_alpha  = rep_a_fgls2,
-                repeat_gamma  = rep_g_fgls2,
-                repeat_lambda = rep_l_fgls2,
-                subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
-                run_gls       = true,
-                shrinkage     = fgls_shrinkage,
-                project_spd   = fgls_project_spd,
-                spd_floor     = fgls_spd_floor
-            )
-        else
-            β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.fgls2(
-                df_gls, N1, N2, T;
-                x_col=:x, y_col=:y,
-                i_block_est = i_block_est,
-                j_block_est = j_block_est,
-                t_block_est = t_block_est,
-                repeat_alpha  = rep_a_fgls2,
-                repeat_gamma  = rep_g_fgls2,
-                repeat_lambda = rep_l_fgls2,
-                subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
-                run_gls       = true,
-                shrinkage     = fgls_shrinkage,
-                project_spd   = fgls_project_spd,
-                spd_floor     = fgls_spd_floor
-            )
-        end
+        β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.fgls2(
+            df_gls, N1, N2, T;
+            x_col=:x, y_col=:y,
+            i_block_est = i_block_est,
+            j_block_est = j_block_est,
+            t_block_est = t_block_est,
+            repeat_alpha  = rep_a_fgls2,
+            repeat_gamma  = rep_g_fgls2,
+            repeat_lambda = rep_l_fgls2,
+            subtract_sigma_u2_fgls2 = subtract_sigma_u2_fgls2,
+            run_gls       = true,
+            shrinkage     = fgls_shrinkage,
+            project_spd   = fgls_project_spd,
+            spd_floor     = fgls_spd_floor
+        )
     catch err
         @warn "FGLS2 failed" exception=(err, catch_backtrace()) n=nrow(df) p=ncol(df) N1=N1 N2=N2 T=T
     end
@@ -200,7 +192,7 @@ function print_estimate_summary(res::NamedTuple; beta_true::Real)
     β̂_fe   = res.β_fe  === nothing ? nothing : res.β_fe[1]
     v_fe    = res.V_fe  === nothing ? nothing : res.V_fe[1,1]
 
-β̂_fgls1 = res.β_fgls1 === nothing ? nothing : res.β_fgls1[2]
+    β̂_fgls1 = res.β_fgls1 === nothing ? nothing : res.β_fgls1[2]
     v_fgls1  = res.V_fgls1 === nothing ? nothing : res.V_fgls1[2,2]
 
     β̂_fgls2 = res.β_fgls2 === nothing ? nothing : res.β_fgls2[2]
@@ -309,6 +301,8 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 beta_true=p.beta_true, c_true=p.c_true,
                 vcov_ols=p.vcov_ols, vcov_fe=p.vcov_fe,
                 cluster_col_ols=p.cluster_col_ols, cluster_col_fe=p.cluster_col_fe,
+                # OLS FE
+                fe_alphaT=p.fe_alphaT, fe_gammaT=p.fe_gammaT, fe_lambdaJ=p.fe_lambdaJ,
                 # estimation-side Ω toggles
                 i_block_est=p.i_block_est, j_block_est=p.j_block_est, t_block_est=p.t_block_est,
                 # FGLS controls
@@ -316,7 +310,6 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 rep_a_fgls2=p.repeat_alpha_fgls2, rep_g_fgls2=p.repeat_gamma_fgls2, rep_l_fgls2=p.repeat_lambda_fgls2,
                 subtract_sigma_u2_fgls1 = p.subtract_sigma_u2_fgls1,
                 subtract_sigma_u2_fgls2 = p.subtract_sigma_u2_fgls2,
-                iterate_fgls2 = p.iterate_fgls2,
                 # FGLS shrinkage
                 fgls_shrinkage=p.fgls_shrinkage,
                 fgls_project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
