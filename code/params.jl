@@ -17,8 +17,8 @@ const PARAMS = (;
 
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices ---
-    i_block_est = false,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
-    j_block_est = false,
+    i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
+    j_block_est = true,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
@@ -27,8 +27,8 @@ const PARAMS = (;
     repeat_lambda_fgls = false,
     subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     # For FGLS2:
-    repeat_alpha_fgls2 = false,
-    repeat_gamma_fgls2 = false,
+    repeat_alpha_fgls2 = true,
+    repeat_gamma_fgls2 = true,
     repeat_lambda_fgls2 = false,
     subtract_sigma_u2_fgls2 = true,  # whether to subtract σ²_u from diagonals of Ω estimates
     iterate_fgls2 = false,            # whether to do multiple FGLS2 iterations (not just one-shot)
@@ -38,8 +38,8 @@ const PARAMS = (;
     fgls_spd_floor   = 1e-8,
 
     # --- GLS (oracle) controls ---
-    repeat_alpha_gls = false,
-    repeat_gamma_gls = false,
+    repeat_alpha_gls = true,
+    repeat_gamma_gls = true,
     repeat_lambda_gls = false,
     gls_shrinkage    = 1.0,    # off-diag shrink; 1.0 = none
     gls_project_spd  = false,    # clip eigvals ≥ gls_spd_floor
@@ -52,7 +52,7 @@ const PARAMS = (;
     print_omegas_post_dgp = false,           # print true Ω after DGP in smoke diagnostics
     print_generated_data_head = false,      # how many rows of generated data to print in smoke test
     generated_data_rows_to_check = 20,      # how many rows of generated data to check for invariance
-    smoke_test_debug_print = false,         # print extra debug info in smoke diagnostics
+    smoke_test_debug_print = true,         # print extra debug info in smoke diagnostics
 
     # --- DGP parameters ---
     # --- Panel sizes ---
@@ -67,14 +67,14 @@ const PARAMS = (;
 
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
-    i_block = false,
-    j_block = false,
+    i_block = true,
+    j_block = true,
     t_block = false,
 
     # --- Draw modes ---
     # :draw_once | :mixed | :full_redraw
-    i_draw_mode = :draw_once,
-    j_draw_mode = :draw_once,
+    i_draw_mode = :mixed,
+    j_draw_mode = :mixed,
     t_draw_mode = :draw_once,
 
     # --- Means (E[FE]) ---

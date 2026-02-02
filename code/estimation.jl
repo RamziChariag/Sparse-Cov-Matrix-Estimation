@@ -116,7 +116,6 @@ function estimate_all(df::DataFrame;
         se_fgls1 = sqrt.(max.(diag(V_fgls1), 0))
     end
 
-    # 3b) FGLS2
     # 3b) FGLS2 
     β_fgls2 = nothing; e_fgls2 = nothing; V_fgls2 = nothing; Ωhat2 = nothing; se_fgls2 = nothing
     try

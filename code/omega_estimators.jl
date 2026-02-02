@@ -435,6 +435,105 @@ function two_step_sigma_u(res::AbstractVector{<:Real}, component::Symbol, N1::In
 end
 
 """
+    sigmas_fgls2_double_diff(df, N1, N2, T, beta_hat;
+                             x_col=:x, y_col=:y,
+                             repeat_alpha_fgls2::Bool,
+                             repeat_gamma_fgls2::Bool,
+                             repeat_lambda_fgls2::Bool)
+
+Returns a NamedTuple with (sigma_u2, sigma_alpha2, sigma_gamma2, sigma_lambda2).
+
+Rule for sigma_u2:
+- If all repeat flags are false: sigma_u2 = Var(three-way FE residuals) using suffix "alpha_gamma_lambda".
+- Otherwise: sigma_u2 from 2×2 rectangle contrasts (i,j) at fixed t on the same "alpha_gamma_lambda" residuals: Var(d)/4.
+
+The remaining scalars are computed from suffix residuals:
+- sigma_alpha2 from "gamma_lambda" residuals, using Var(mean over (j,t) at fixed i) minus sigma_u2/(N2*T).
+- sigma_gamma2 from "alpha_lambda" residuals, using Var(mean over (i,t) at fixed j) minus sigma_u2/(N1*T).
+- sigma_lambda2 from "alpha_gamma" residuals, using Var(mean over (i,j) at fixed t) minus sigma_u2/(N1*N2).
+
+Assumes df is ordered so reshape(res, N1, N2, T) corresponds to A[i,j,t].
+"""
+function sigmas_fgls2_double_diff(df::DataFrame, N1::Int, N2::Int, T::Int, beta_hat::Real;
+                                 x_col::Symbol=:x, y_col::Symbol=:y,
+                                 repeat_alpha_fgls2::Bool,
+                                 repeat_gamma_fgls2::Bool,
+                                 repeat_lambda_fgls2::Bool)
+
+    # ------------------------------------------------------------
+    # (1) sigma_u2
+    # ------------------------------------------------------------
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma_lambda"])
+    res_u = residuals_from_suffix(df, "alpha_gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+    σ2_u = 0.0
+    if !(repeat_alpha_fgls2 || repeat_gamma_fgls2 || repeat_lambda_fgls2)
+        σ2_u = max(0.0, var(res_u; corrected=true))
+    else
+        A = reshape(res_u, N1, N2, T)  # [i, j, t]
+
+        n = 0
+        mean_d = 0.0
+        M2 = 0.0
+
+        @inbounds for t in 1:T, i in 1:(N1-1), ip in (i+1):N1, j in 1:(N2-1), jp in (j+1):N2
+            d = (A[i,  j,  t] - A[i,  jp, t]) - (A[ip, j,  t] - A[ip, jp, t])
+            n += 1
+            δ = d - mean_d
+            mean_d += δ / n
+            M2 += δ * (d - mean_d)
+        end
+
+        vd = n > 1 ? (M2 / (n - 1)) : 0.0
+        σ2_u = max(0.0, vd / 4.0)
+    end
+
+    # ------------------------------------------------------------
+    # (2) sigma_alpha2  (from gamma_lambda residuals)
+    # ------------------------------------------------------------
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
+    res_a = residuals_from_suffix(df, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+    A_a = reshape(res_a, N1, N2, T)
+    rbar_i = Vector{Float64}(undef, N1)
+    @inbounds for i in 1:N1
+        rbar_i[i] = mean(@view A_a[i, :, :])   # avg over (j,t) at fixed i
+    end
+    σ2_α = max(0.0, var(rbar_i; corrected=true) - σ2_u / (N2*T))
+
+    # ------------------------------------------------------------
+    # (3) sigma_gamma2  (from alpha_lambda residuals)
+    # ------------------------------------------------------------
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
+    res_g = residuals_from_suffix(df, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+    A_g = reshape(res_g, N1, N2, T)
+    rbar_j = Vector{Float64}(undef, N2)
+    @inbounds for j in 1:N2
+        rbar_j[j] = mean(@view A_g[:, j, :])   # avg over (i,t) at fixed j
+    end
+    σ2_γ = max(0.0, var(rbar_j; corrected=true) - σ2_u / (N1*T))
+
+    # ------------------------------------------------------------
+    # (4) sigma_lambda2  (from alpha_gamma residuals)
+    # ------------------------------------------------------------
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
+    res_l = residuals_from_suffix(df, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+
+    A_l = reshape(res_l, N1, N2, T)
+    rbar_t = Vector{Float64}(undef, T)
+    @inbounds for t in 1:T
+        rbar_t[t] = mean(@view A_l[:, :, t])   # avg over (i,j) at fixed t
+    end
+    σ2_λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
+
+    return (; sigma_u2 = σ2_u,
+            sigma_alpha2 = σ2_α,
+            sigma_gamma2 = σ2_γ,
+            sigma_lambda2 = σ2_λ)
+end
+
+"""
 Estimate base blocks (Ωα, Ωγ, Ωλ) using per-dimension switches.
 
 Single-step (two_step=false):
@@ -461,7 +560,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          t_block_est::Bool=true,
                          two_step::Bool=false,
                          return_sigma::Bool=false,
-                         subtract_sigma_u2::Bool=true)
+                         subtract_sigma_u2::Bool=true,
+                         repeat_alpha_fgls2::Bool=false,
+                         repeat_gamma_fgls2::Bool=false,
+                         repeat_lambda_fgls2::Bool=false)
 
     if !two_step
         # --- single-step procedure ---
@@ -509,6 +611,19 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # =========================
     # Two-step path (FGLS2)
     # =========================
+
+    # Double diff sigmas
+    S = sigmas_fgls2_double_diff(df, N1, N2, T, beta_hat;
+        x_col=x_col, y_col=y_col,
+        repeat_alpha_fgls2=repeat_alpha_fgls2,
+        repeat_gamma_fgls2=repeat_gamma_fgls2,
+        repeat_lambda_fgls2=repeat_lambda_fgls2
+    )
+
+    σ2_u = S.sigma_u2
+    # σ2α  = S.sigma_alpha2
+    # σ2γ  = S.sigma_gamma2
+    # σ2λ  = S.sigma_lambda2
     
     # Accumulators for pooled σ̂_u^2
     σ2_parts = Float64[]   # component-specific σ̂_u^2
@@ -529,23 +644,34 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         Ωα = two_step_mean_outer_products(res, :i, N1, N2, T)
 
         # σ̂_{u,α}^2: avg sample variance across j within (i,t)
-        σsum = 0.0; cells = 0
-        if N2 > 1
-            A = reshape(res, N1, N2, T)  # [i, j, t]
-            @inbounds for t in 1:T, i in 1:N1
-                σsum += var_over_last(@view A[i, :, t]) # variance across j
-                cells += 1
-            end
-        end
-        σ2α = cells > 0 ? σsum / cells : 0.0
-        push!(σ2_parts, max(σ2α, 0.0))
-        push!(dfw, (N1*T)*max(N2-1, 0))
-        if subtract_sigma_u2 && σ2α > 0
-            diag_dominance_safe_subtract!(Ωα, σ2α / N2)
+        # σsum = 0.0; cells = 0
+        # if N2 > 1
+        #     A = reshape(res, N1, N2, T)  # [i, j, t]
+        #     @inbounds for t in 1:T, i in 1:N1
+        #         σsum += var_over_last(@view A[i, :, t]) # variance across j
+        #         cells += 1
+        #     end
+        # end
+        # σ2α = cells > 0 ? σsum / cells : 0.0
+        # push!(σ2_parts, max(σ2α, 0.0))
+        # push!(dfw, (N1*T)*max(N2-1, 0))
+        if subtract_sigma_u2 && σ2_u > 0
+            diag_dominance_safe_subtract!(Ωα, σ2_u / N2)
         end
         Symmetric(Matrix(Ωα))
     else
-        sigmas.sigma_alpha2 * I(N1)
+        dfi = df
+        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
+        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        A = reshape(res, N1, N2, T)  # [i, j, t]
+        rbar_i = Vector{Float64}(undef, N1)
+        @inbounds for i in 1:N1
+            rbar_i[i] = mean(@view A[i, :, :])   # avg over (j,t) at fixed i
+        end
+
+        σ2α = max(0.0, var(rbar_i; corrected=true) - σ2_u / (N2*T))
+        σ2α * I(N1)
     end
 
     # j / γ : mean over i for each (j,t); outer product averaged over t
@@ -557,23 +683,34 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
         Ωγ = two_step_mean_outer_products(res, :j, N1, N2, T)
 
-        σsum = 0.0; cells = 0
-        if N1 > 1
-            A = reshape(res, N1, N2, T)  # [i, j, t]
-            @inbounds for t in 1:T, j in 1:N2
-                σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (j,t)
-                cells += 1
-            end
-        end
-        σ2γ = cells > 0 ? σsum / cells : 0.0
-        push!(σ2_parts, max(σ2γ, 0.0))
-        push!(dfw, (N2*T)*max(N1-1, 0))
-        if subtract_sigma_u2 && σ2γ > 0
-            diag_dominance_safe_subtract!(Ωγ, σ2γ / N1)
+        # σsum = 0.0; cells = 0
+        # if N1 > 1
+        #     A = reshape(res, N1, N2, T)  # [i, j, t]
+        #     @inbounds for t in 1:T, j in 1:N2
+        #         σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (j,t)
+        #         cells += 1
+        #     end
+        # end
+        # σ2γ = cells > 0 ? σsum / cells : 0.0
+        # push!(σ2_parts, max(σ2γ, 0.0))
+        # push!(dfw, (N2*T)*max(N1-1, 0))
+        if subtract_sigma_u2 && σ2_u > 0
+            diag_dominance_safe_subtract!(Ωγ, σ2_u / N1)
         end
         Symmetric(Matrix(Ωγ))
     else
-        sigmas.sigma_gamma2 * I(N2)
+        dfj = df
+        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
+        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+
+        A = reshape(res, N1, N2, T)  # [i, j, t]
+        rbar_j = Vector{Float64}(undef, N2)
+        @inbounds for j in 1:N2
+            rbar_j[j] = mean(@view A[:, j, :])   # avg over (i,t) at fixed j
+        end
+
+        σ2γ = max(0.0, var(rbar_j; corrected=true) - σ2_u / (N1*T))
+        σ2γ * I(N2)
     end
 
     # t / λ : mean over i for each (t,j); outer product averaged over j
@@ -585,32 +722,45 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
         Ωλ = two_step_mean_outer_products(res, :t, N1, N2, T)
 
-        σsum = 0.0; cells = 0
-        if N1 > 1
-            A = reshape(res, N1, N2, T)  # [i, j, t]
-            @inbounds for t in 1:T, j in 1:N2
-                σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (t,j)
-                cells += 1
-            end
-        end
+        # σsum = 0.0; cells = 0
+        # if N1 > 1
+        #     A = reshape(res, N1, N2, T)  # [i, j, t]
+        #     @inbounds for t in 1:T, j in 1:N2
+        #         σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (t,j)
+        #         cells += 1
+        #     end
+        # end
 
-        σ2λ = cells > 0 ? σsum / cells : 0.0
-        push!(σ2_parts, max(σ2λ, 0.0))
-        push!(dfw, (N2*T)*max(N1-1, 0))
-        if subtract_sigma_u2 && σ2λ > 0
-            diag_dominance_safe_subtract!(Ωλ, σ2λ / N1)
+        # σ2λ = cells > 0 ? σsum / cells : 0.0
+        # push!(σ2_parts, max(σ2λ, 0.0))
+        # push!(dfw, (N2*T)*max(N1-1, 0))
+        if subtract_sigma_u2 && σ2_u > 0
+            diag_dominance_safe_subtract!(Ωλ, σ2_u / N1)
         end
         Symmetric(Matrix(Ωλ))
     else
-        sigmas.sigma_lambda2 * I(T)
+        dft = df
+        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
+        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+
+        A = reshape(res, N1, N2, T)  # [i, j, t]
+        rbar_t = Vector{Float64}(undef, T)
+        @inbounds for t in 1:T
+            rbar_t[t] = mean(@view A[:, :, t])   # avg over (i,j) at fixed t
+        end
+
+        σ2λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
+        σ2λ * I(T)
     end
 
     # --- pooled σ̂_u^2 (df-weighted across available components) ---
-    total_df = sum(dfw)
-    σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
-    σ2_u = max(σ2_u, 0.0)
+    # total_df = sum(dfw)
+    # σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
+    # σ2_u = max(σ2_u, 0.0)
     
-    return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u, sigma_alpha2 = σ2α, sigma_gamma2 = σ2γ, sigma_lambda2 = σ2λ) : (; Ωa, Ωg, Ωl)
+    return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
+
+    # return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u, sigma_alpha2 = σ2α, sigma_gamma2 = σ2γ, sigma_lambda2 = σ2λ) : (; Ωa, Ωg, Ωl)
 end
 
 "Build Sα, Sγ, Sλ per your repeat rules (n × cols)."

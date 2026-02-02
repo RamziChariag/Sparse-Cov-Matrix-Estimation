@@ -298,12 +298,17 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         t_block_est=t_block_est,
         two_step=true,
         return_sigma=true,
-        subtract_sigma_u2 = subtract_sigma_u2_fgls2
+        subtract_sigma_u2 = subtract_sigma_u2_fgls2,
+        repeat_alpha_fgls2 = repeat_alpha,
+        repeat_gamma_fgls2 = repeat_gamma,
+        repeat_lambda_fgls2 = repeat_lambda
     )
     Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
-    # This uses pooled σ̂_u^2 from two-step (not per-dim σ̂²_u)
-    #σ2_u = blocks.sigma_u2    
-    σ2_u = sigmas.sigma_u2
+    # This uses fgls2 σ̂_u^2 from two-step
+    σ2_u = blocks.sigma_u2 
+
+    # This uses threeway fixed effects residuals to estimate σ̂_u^2   
+    #σ2_u = sigmas.sigma_u2
 
          # ===== DEBUG PRINT (small blocks + sigma pieces) =====
     if debug
@@ -350,7 +355,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         @printf("   %-18s = %.6g\n", "sigma_alpha2", getfield(sigmas, :sigma_alpha2))
         @printf("   %-18s = %.6g\n", "sigma_gamma2", getfield(sigmas, :sigma_gamma2))
         @printf("   %-18s = %.6g\n", "sigma_lambda2", getfield(sigmas, :sigma_lambda2))
-        @printf("   %-18s = %.6g\n", "sigma_u2 (two-step pooled)", σ2_u)
+        @printf("   %-18s = %.6g\n", "sigma_u2 (FGLS2)", σ2_u)
         println("======================================================\n")
     end
     # ===== END DEBUG PRINT =====
