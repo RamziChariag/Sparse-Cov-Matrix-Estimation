@@ -133,7 +133,7 @@ function save_mc_bundle!(bundle; params::NamedTuple)
     isdir(dir) || mkpath(dir)
     path = output_path(params)
 
-    JLD2.jldopen(path, isfile(path) ? "r+" : "w") do f
+    JLD2.jldopen(path, "w") do f
         haskey(f, "mc_bundle") && delete!(f, "mc_bundle")
         haskey(f, "params")    && delete!(f, "params")
         f["mc_bundle"] = tosave

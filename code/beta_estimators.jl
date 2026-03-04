@@ -24,11 +24,17 @@ end
 # -----------------------------
 
 """
-Within-transform x and y along group_vars ⊆ [:i,:j,:t].
+Within-transform x and y along group_vars ⊆ [:i,:j,:t,:alphaT,:gammaT].
 
 For k dims, uses x̃ = x + (k-1)·x̄ − Σ_d x̄_d (same for y).
 Creates x_bar_{dim}, y_bar_{dim} and x_tilde_{suffix}, y_tilde_{suffix},
-where suffix maps :i→alpha, :j→gamma, :t→lambda, :it→alphaT, :jt→gammaT, :jt→lambdaJ.
+where suffix maps:
+  :i      → alpha
+  :j      → gamma
+  :t      → lambda
+  :alphaT → alphaT   (i×t)
+  :gammaT → gammaT   (j×t)
+
 Returns the suffix String.
 """
 function within_transform!(
@@ -39,29 +45,27 @@ function within_transform!(
 )
     @assert !isempty(group_vars) "group_vars must not be empty"
 
-    allowed = (:i, :j, :t, :alphaT, :gammaT, :lambdaJ)
+    allowed = (:i, :j, :t, :alphaT, :gammaT)
     for v in group_vars
         @assert v in allowed "group_vars may only contain $(collect(allowed))"
     end
 
     # How we *name* the suffix
     dim_map = Dict(
-        :i       => "alpha",
-        :j       => "gamma",
-        :t       => "lambda",
-        :alphaT  => "alphaT",
-        :gammaT  => "gammaT",
-        :lambdaJ => "lambdaJ",
+        :i      => "alpha",
+        :j      => "gamma",
+        :t      => "lambda",
+        :alphaT => "alphaT",
+        :gammaT => "gammaT",
     )
     suffix = join(getindex.(Ref(dim_map), group_vars), "_")
 
     # How we *group* for each FE
-    group_key(v::Symbol) = v === :i       ? :i :
-                           v === :j       ? :j :
-                           v === :t       ? :t :
-                           v === :alphaT  ? [:i, :t] :
-                           v === :gammaT  ? [:j, :t] :
-                           v === :lambdaJ ? [:j, :t] :
+    group_key(v::Symbol) = v === :i      ? :i :
+                           v === :j      ? :j :
+                           v === :t      ? :t :
+                           v === :alphaT ? [:i, :t] :
+                           v === :gammaT ? [:j, :t] :
                            error("Unhandled group var: $v")
 
     # Per-dimension means (replicated to rows)
@@ -108,7 +112,9 @@ Returns (beta::Vector, resid::Vector, V::Matrix).
 """
 function ols_estimation(X::AbstractMatrix, y::AbstractVector;
                         vcov::Symbol=:HC0,
-                        cluster::Union{Nothing,AbstractVector}=nothing)
+                        cluster::Union{Nothing,AbstractVector}=nothing,
+                        df_resid::Union{Nothing,Int}=nothing)
+
     n = length(y); @assert size(X,1) == n "Rows of X must match length of y"
     k = size(X,2)
 
@@ -118,8 +124,11 @@ function ols_estimation(X::AbstractMatrix, y::AbstractVector;
     XtX = X' * X
     XtX_inv = inv(XtX)
 
+    # default residual dof is n-k unless user overrides it (FE case)
+    df = df_resid === nothing ? max(n - k, 1) : max(df_resid, 1)
+
     if vcov == :none
-        σ2 = sum(abs2, e) / max(n - k, 1)
+        σ2 = sum(abs2, e) / df
         V  = σ2 * XtX_inv
 
     elseif vcov == :HC0 || vcov == :HC1
@@ -127,7 +136,7 @@ function ols_estimation(X::AbstractMatrix, y::AbstractVector;
         meat = X' * (X .* w)
         V = XtX_inv * meat * XtX_inv
         if vcov == :HC1
-            V .*= n / max(n - k, 1)
+            V .*= n / df
         end
 
     elseif vcov == :cluster
@@ -142,7 +151,8 @@ function ols_estimation(X::AbstractMatrix, y::AbstractVector;
             xte = Xg' * eg
             meat .+= xte * xte'
         end
-        scale = (G / max(G - 1, 1)) * (n - 1) / max(n - k, 1)  # CR1
+        # CR1 scaling with FE-adjusted df
+        scale = (G / max(G - 1, 1)) * ((n - 1) / df)
         V = XtX_inv * (scale .* meat) * XtX_inv
 
     else
@@ -150,6 +160,39 @@ function ols_estimation(X::AbstractMatrix, y::AbstractVector;
     end
 
     return β, e, V
+end
+
+function fe_df_resid(df::DataFrame, group_vars::Vector{Symbol}, kx::Int)
+    n = nrow(df)
+
+    N1 = length(unique(df.i))
+    N2 = length(unique(df.j))
+    T = length(unique(df.t))
+
+    # levels for interactions if used
+    L_alphaT = (:alphaT in group_vars) ? N1 * T : 0
+    L_gammaT = (:gammaT in group_vars) ? N2 * T : 0
+
+    # rank(FE space) INCLUDING intercept, for each specification
+    rank_fe =
+        if group_vars == [:i, :j, :t] || (all(v -> v in (:i,:j,:t), group_vars) && length(group_vars)==3)
+            N1 + N2 + T - 2
+
+        elseif (:alphaT in group_vars) && (:j in group_vars) && length(group_vars)==2
+            L_alphaT + N2 - 1
+
+        elseif (:i in group_vars) && (:gammaT in group_vars) && length(group_vars)==2
+            N1 + L_gammaT - 1
+
+        elseif (:alphaT in group_vars) && (:gammaT in group_vars) && length(group_vars)==2
+            # α_it + γ_jt
+            L_alphaT + L_gammaT - 1
+
+        else
+            error("Unhandled group_vars = $group_vars for dof calculation.")
+        end
+
+    return n - (kx + rank_fe)
 end
 
 "Raw-data OLS on a DataFrame (adds an intercept automatically)."
@@ -163,7 +206,7 @@ function ols(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
     return ols_estimation(X, y; vcov=vcov, cluster=cl)
 end
 
-"Three-way FE OLS on a DataFrame (within-transform, then OLS without intercept)."
+"FE OLS on a DataFrame (within-transform, then OLS without intercept)."
 function fe_ols(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
                 group_vars::Vector{Symbol} = [:i,:j,:t],
                 vcov::Symbol=:HC1, cluster_col::Union{Nothing,Symbol}=nothing)
@@ -173,7 +216,8 @@ function fe_ols(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
     X = reshape(df[!, xt], :, 1)      # n×1 Matrix (no intercept after within)
     y = Vector(df[!, yt])
     cl = cluster_col === nothing ? nothing : Vector(df[!, cluster_col])
-    return ols_estimation(X, y; vcov=vcov, cluster=cl)
+    df_resid = fe_df_resid(df, group_vars, 1)
+    return ols_estimation(X, y; vcov=vcov, cluster=cl, df_resid=df_resid)
 end
 
 # -----------------------------

@@ -9,21 +9,19 @@ const PARAMS = (;
     # --- Estimation parameters ---
     beta_true = 2.0,          # true β used to form y
     c_true    = 0.0,          # true constant in y-generation
-    vcov_ols  = :HC0,         # :none | :HC0 | :HC1 | :cluster
-    vcov_fe   = :HC0,         # same choices
+    vcov_ols  = :HC1,         # :none | :HC0 | :HC1 | :cluster
+    vcov_fe   = :HC1,         # same choices
     # If you later want cluster-robust, set vcov_*=:cluster and add these:
     cluster_col_ols = nothing,  # e.g., :i or nothing
     cluster_col_fe  = nothing,  # e.g., :i or nothing
 
     # --- FE controls ---
     # Default FE is three-way (:i, :j, :t).
-    # If toggled, replace the corresponding FE with an interaction FE:
-    #   i  -> it   (alphaT)
-    #   j  -> jt   (gammaT)
-    #   t  -> jt   (lambdaJ)
-    fe_alphaT  = false,
-    fe_gammaT  = false,
-    fe_lambdaJ = false,
+    # If toggled, replace the corresponding FE *and* :t with an interaction FE:
+    #   fe_alphaT = true  => use :alphaT = (i,t), and drop :i and :t
+    #   fe_gammaT = true  => use :gammaT = (j,t), and drop :j and :t
+    fe_alphaT = false,
+    fe_gammaT = false,
 
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices ---

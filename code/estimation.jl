@@ -61,7 +61,6 @@ function estimate_all(df::DataFrame;
     # OLS FE
     fe_alphaT::Bool=false,
     fe_gammaT::Bool=false,
-    fe_lambdaJ::Bool=false,
 
     # FGLS (estimation-side Ω choices)
     i_block_est::Bool=true, j_block_est::Bool=false, t_block_est::Bool=false,
@@ -90,8 +89,11 @@ function estimate_all(df::DataFrame;
     fe_group_vars = Symbol[
         fe_alphaT  ? :alphaT  : :i,
         fe_gammaT  ? :gammaT  : :j,
-        fe_lambdaJ ? :lambdaJ : :t,
     ]
+    # Only include :t if it has NOT been absorbed by an interaction FE
+    if !(fe_alphaT || fe_gammaT)
+        push!(fe_group_vars, :t)
+    end
 
     β_fe, e_fe, V_fe = RCBetaEstimators.fe_ols(df; x_col=:x, y_col=:y,
                                                group_vars=fe_group_vars,
@@ -302,7 +304,7 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 vcov_ols=p.vcov_ols, vcov_fe=p.vcov_fe,
                 cluster_col_ols=p.cluster_col_ols, cluster_col_fe=p.cluster_col_fe,
                 # OLS FE
-                fe_alphaT=p.fe_alphaT, fe_gammaT=p.fe_gammaT, fe_lambdaJ=p.fe_lambdaJ,
+                fe_alphaT=p.fe_alphaT, fe_gammaT=p.fe_gammaT,
                 # estimation-side Ω toggles
                 i_block_est=p.i_block_est, j_block_est=p.j_block_est, t_block_est=p.t_block_est,
                 # FGLS controls

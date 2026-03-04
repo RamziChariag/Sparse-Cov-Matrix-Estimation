@@ -241,13 +241,13 @@ function estimate_homoskedastic_component_variances(df::DataFrame, N1::Int, N2::
     σu2 = mean(res_full .^ 2)
 
     res_l = residuals_from_suffix(df, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
-    σλ2 = mean(res_l .^ 2) - σu2
+    σλ2 = var(res_l; corrected=true) - σu2
 
     res_g = residuals_from_suffix(df, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
-    σγ2 = mean(res_g .^ 2) - σu2
+    σγ2 = var(res_g; corrected=true) - σu2
 
     res_a = residuals_from_suffix(df, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
-    σα2 = mean(res_a .^ 2) - σu2
+    σα2 = var(res_a; corrected=true) - σu2
 
     return (; sigma_u2 = σu2, sigma_alpha2 = σα2, sigma_gamma2 = σγ2, sigma_lambda2 = σλ2)
 end
@@ -349,7 +349,7 @@ function generate_single_component_omega_with_demeaning(df::DataFrame, component
     m = size(B, 2)                      # number of replicates
     μ = mean(B; dims=2)                 # row means (column-wise mean vector)
     Bc = B .- μ                         # broadcast across columns
-    denom = max(m - 1, 1)
+    denom = max(m - 1, 1)            
 
     Ω = (Bc * Bc') / denom              # unbiased sample covariance across replicates
 
@@ -361,78 +361,6 @@ function generate_single_component_omega_with_demeaning(df::DataFrame, component
     return Ω
 end
 
-"""
-two_step_sigma_u(res, component, N1, N2, T)
-
-Compute σ̂_u^2 for a component using the two-step idea:
-  - Average-of-vectors is done over a 'repeat' dimension R (i: R=T; j: R=N1; t: R=N1 under current design).
-  - Here we estimate σ̂_u^2 as the average of within-cell sample variances across that repeat dimension.
-
-Assumes df has already been sorted for `component` before residuals `res` were built:
-  - :i  → sort! by [:t, :j, :i] ⇒ reshape (N1, N2, T), take var over dim=3 (t)
-  - :j  → sort! by [:t, :i, :j] ⇒ reshape (N2, N1, T), take var over dim=2 (i)
-  - :t  → sort! by [:j, :i, :t] ⇒ reshape (T,  N2, N1), take var over dim=3 (i)
-
-Returns: (σ2::Float64, R::Int, df_weight::Int)
-"""
-function two_step_sigma_u(res::AbstractVector{<:Real}, component::Symbol, N1::Int, N2::Int, T::Int)
-    @assert length(res) == N1*N2*T "res length mismatch with N1*N2*T"
-
-    if component === :i
-        # shape: [i, j, t], variance over t
-        A = reshape(res, N1, N2, T)
-        # sample var across t for each (i,j)
-        # var over last dim: mean((x - mean)^2) * R/(R-1)
-        σ2_cells = map(1:N1, 1:N2) do i, j
-            x = @view A[i, j, :]
-            T > 1 ? var(x; corrected=true) : 0.0
-        end
-        σ2_hat = mean(σ2_cells)
-        R = T
-        dfw = (N1*N2)*max(T-1, 0)
-        return (max(σ2_hat, 0.0), R, dfw)
-
-    elseif component === :j
-        # shape: [j, i, t], variance over i
-        A = reshape(res, N2, N1, T)
-        σ2_cells = map(1:N2, 1:N1, 1:T) do j, i, t
-            # We'll compute var across i by building all i for each (j,t) below
-            nothing
-        end
-        # Build (j,t) panels and take var across i
-        σsum = 0.0; cnt = 0
-        if N1 > 1
-            for t in 1:T, j in 1:N2
-                x = @view A[j, :, t]
-                σsum += var(x; corrected=true)
-                cnt += 1
-            end
-        end
-        σ2_hat = (cnt > 0 ? σsum / cnt : 0.0)
-        R = N1
-        dfw = (N2*T)*max(N1-1, 0)
-        return (max(σ2_hat, 0.0), R, dfw)
-
-    elseif component === :t
-        # shape: [t, j, i], variance over i (your current design averages over i)
-        A = reshape(res, T, N2, N1)
-        σsum = 0.0; cnt = 0
-        if N1 > 1
-            for t in 1:T, j in 1:N2
-                x = @view A[t, j, :]
-                σsum += var(x; corrected=true)
-                cnt += 1
-            end
-        end
-        σ2_hat = (cnt > 0 ? σsum / cnt : 0.0)
-        R = N1
-        dfw = (N2*T)*max(N1-1, 0)
-        return (max(σ2_hat, 0.0), R, dfw)
-
-    else
-        error("Unknown component: $component. Use :i, :j, or :t.")
-    end
-end
 
 """
     sigmas_fgls2_double_diff(df, N1, N2, T, beta_hat;
@@ -487,50 +415,7 @@ function sigmas_fgls2_double_diff(df::DataFrame, N1::Int, N2::Int, T::Int, beta_
         vd = n > 1 ? (M2 / (n - 1)) : 0.0
         σ2_u = max(0.0, vd / 4.0)
     end
-
-    # ------------------------------------------------------------
-    # (2) sigma_alpha2  (from gamma_lambda residuals)
-    # ------------------------------------------------------------
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-    res_a = residuals_from_suffix(df, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
-
-    A_a = reshape(res_a, N1, N2, T)
-    rbar_i = Vector{Float64}(undef, N1)
-    @inbounds for i in 1:N1
-        rbar_i[i] = mean(@view A_a[i, :, :])   # avg over (j,t) at fixed i
-    end
-    σ2_α = max(0.0, var(rbar_i; corrected=true) - σ2_u / (N2*T))
-
-    # ------------------------------------------------------------
-    # (3) sigma_gamma2  (from alpha_lambda residuals)
-    # ------------------------------------------------------------
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-    res_g = residuals_from_suffix(df, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
-
-    A_g = reshape(res_g, N1, N2, T)
-    rbar_j = Vector{Float64}(undef, N2)
-    @inbounds for j in 1:N2
-        rbar_j[j] = mean(@view A_g[:, j, :])   # avg over (i,t) at fixed j
-    end
-    σ2_γ = max(0.0, var(rbar_j; corrected=true) - σ2_u / (N1*T))
-
-    # ------------------------------------------------------------
-    # (4) sigma_lambda2  (from alpha_gamma residuals)
-    # ------------------------------------------------------------
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-    res_l = residuals_from_suffix(df, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
-
-    A_l = reshape(res_l, N1, N2, T)
-    rbar_t = Vector{Float64}(undef, T)
-    @inbounds for t in 1:T
-        rbar_t[t] = mean(@view A_l[:, :, t])   # avg over (i,j) at fixed t
-    end
-    σ2_λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
-
-    return (; sigma_u2 = σ2_u,
-            sigma_alpha2 = σ2_α,
-            sigma_gamma2 = σ2_γ,
-            sigma_lambda2 = σ2_λ)
+    return (; sigma_u2 = σ2_u)
 end
 
 """
@@ -621,9 +506,6 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     )
 
     σ2_u = S.sigma_u2
-    # σ2α  = S.sigma_alpha2
-    # σ2γ  = S.sigma_gamma2
-    # σ2λ  = S.sigma_lambda2
     
     # Accumulators for pooled σ̂_u^2
     σ2_parts = Float64[]   # component-specific σ̂_u^2
@@ -632,29 +514,14 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # Keep component-specific sigmas in scope for debug/diagonal subtraction
     σ2α = 0.0; σ2γ = 0.0; σ2λ = 0.0
 
-    var_over_last(x) = var(x; corrected=true)  # sample variance
-
     # i / α : mean over t for each (i,j); outer product averaged over j
     Ωa = if i_block_est
         dfi = df
-        #dfi = sort_for_dim(df, :i)
         ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
         res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
         Ωα = two_step_mean_outer_products(res, :i, N1, N2, T)
 
-        # σ̂_{u,α}^2: avg sample variance across j within (i,t)
-        # σsum = 0.0; cells = 0
-        # if N2 > 1
-        #     A = reshape(res, N1, N2, T)  # [i, j, t]
-        #     @inbounds for t in 1:T, i in 1:N1
-        #         σsum += var_over_last(@view A[i, :, t]) # variance across j
-        #         cells += 1
-        #     end
-        # end
-        # σ2α = cells > 0 ? σsum / cells : 0.0
-        # push!(σ2_parts, max(σ2α, 0.0))
-        # push!(dfw, (N1*T)*max(N2-1, 0))
         if subtract_sigma_u2 && σ2_u > 0
             diag_dominance_safe_subtract!(Ωα, σ2_u / N2)
         end
@@ -677,23 +544,11 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # j / γ : mean over i for each (j,t); outer product averaged over t
     Ωg = if j_block_est
         dfj = df
-        #dfj = sort_for_dim(df, :j)
         ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
         res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
 
         Ωγ = two_step_mean_outer_products(res, :j, N1, N2, T)
 
-        # σsum = 0.0; cells = 0
-        # if N1 > 1
-        #     A = reshape(res, N1, N2, T)  # [i, j, t]
-        #     @inbounds for t in 1:T, j in 1:N2
-        #         σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (j,t)
-        #         cells += 1
-        #     end
-        # end
-        # σ2γ = cells > 0 ? σsum / cells : 0.0
-        # push!(σ2_parts, max(σ2γ, 0.0))
-        # push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2_u > 0
             diag_dominance_safe_subtract!(Ωγ, σ2_u / N1)
         end
@@ -716,24 +571,11 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # t / λ : mean over i for each (t,j); outer product averaged over j
     Ωl = if t_block_est
         dft = df
-        #dft = sort_for_dim(df, :t)
         ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
         res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
 
         Ωλ = two_step_mean_outer_products(res, :t, N1, N2, T)
 
-        # σsum = 0.0; cells = 0
-        # if N1 > 1
-        #     A = reshape(res, N1, N2, T)  # [i, j, t]
-        #     @inbounds for t in 1:T, j in 1:N2
-        #         σsum += var_over_last(@view A[:, j, t])  # variance across i at fixed (t,j)
-        #         cells += 1
-        #     end
-        # end
-
-        # σ2λ = cells > 0 ? σsum / cells : 0.0
-        # push!(σ2_parts, max(σ2λ, 0.0))
-        # push!(dfw, (N2*T)*max(N1-1, 0))
         if subtract_sigma_u2 && σ2_u > 0
             diag_dominance_safe_subtract!(Ωλ, σ2_u / N1)
         end
@@ -752,15 +594,9 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         σ2λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
         σ2λ * I(T)
     end
-
-    # --- pooled σ̂_u^2 (df-weighted across available components) ---
-    # total_df = sum(dfw)
-    # σ2_u = total_df > 0 ? sum(σ2_parts .* dfw) / total_df : 0.0
-    # σ2_u = max(σ2_u, 0.0)
     
     return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
 
-    # return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u, sigma_alpha2 = σ2α, sigma_gamma2 = σ2γ, sigma_lambda2 = σ2λ) : (; Ωa, Ωg, Ωl)
 end
 
 "Build Sα, Sγ, Sλ per your repeat rules (n × cols)."
