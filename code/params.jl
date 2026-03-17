@@ -30,7 +30,7 @@ const PARAMS = (;
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
-    repeat_alpha_fgls = false,
+    repeat_alpha_fgls = true,
     repeat_gamma_fgls = false,
     repeat_lambda_fgls = false,
     subtract_sigma_u2_fgls1 = true,  # whether to subtract σ²_u from diagonals of Ω estimates

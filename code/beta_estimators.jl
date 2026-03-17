@@ -323,13 +323,48 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
     )
     Ωa, Ωg, Ωl = blocks.Ωa, blocks.Ωg, blocks.Ωl
 
-    # 4) S matrices and optional block repeats
+    # 4) S matrices
     Sα, Sγ, Sλ = RCOmegaEstimators.make_S_matrices(
         N1, N2, T; repeat_alpha=repeat_alpha, repeat_gamma=repeat_gamma, repeat_lambda=repeat_lambda)
 
-    if repeat_alpha; Ωa = RCOmegaEstimators.repeat_block(Ωa, T); end
-    if repeat_gamma; Ωg = RCOmegaEstimators.repeat_block(Ωg, T);  end
-    if repeat_lambda; Ωl = RCOmegaEstimators.repeat_block(Ωl, N2); end
+    # 4b) For repeated components with block estimation, estimate the full
+    #     (large) Ω block directly instead of repeating a small block via kron.
+    #     For diagonal (block_est=false) components, simple kron-repeat still works.
+    if repeat_alpha
+        if i_block_est
+            Ωa = RCOmegaEstimators.estimate_repeated_component_omega(
+                df, :i, N1, N2, T, σu2, β̂_ols[2];
+                x_col=x_col, y_col=y_col,
+                subtract_sigma_u2=subtract_sigma_u2_fgls1,
+                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
+        else
+            Ωa = RCOmegaEstimators.repeat_block(Ωa, T)
+        end
+    end
+
+    if repeat_gamma
+        if j_block_est
+            Ωg = RCOmegaEstimators.estimate_repeated_component_omega(
+                df, :j, N1, N2, T, σu2, β̂_ols[2];
+                x_col=x_col, y_col=y_col,
+                subtract_sigma_u2=subtract_sigma_u2_fgls1,
+                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
+        else
+            Ωg = RCOmegaEstimators.repeat_block(Ωg, T)
+        end
+    end
+
+    if repeat_lambda
+        if t_block_est
+            Ωl = RCOmegaEstimators.estimate_repeated_component_omega(
+                df, :t, N1, N2, T, σu2, β̂_ols[2];
+                x_col=x_col, y_col=y_col,
+                subtract_sigma_u2=subtract_sigma_u2_fgls1,
+                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
+        else
+            Ωl = RCOmegaEstimators.repeat_block(Ωl, N2)
+        end
+    end
 
     # 5) Ω̂ and optional conditioning
     Ω̂ = RCOmegaEstimators.construct_omega(Ωa, Ωg, Ωl, Sα, Sγ, Sλ, σu2)

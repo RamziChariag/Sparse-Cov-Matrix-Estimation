@@ -8,7 +8,7 @@ export plot_matrix_percentile, omega_eigen_tables,
        estimate_homoskedastic_component_variances,
        sort_for_dim, arithmetic_mean_outer_products,
        generate_threeway_omegas, generate_single_component_omega,
-       estimate_omegas, make_S_matrices, construct_omega, repeat_block,
+       estimate_omegas, estimate_repeated_component_omega, make_S_matrices, construct_omega, repeat_block,
        shrink_offdiagonal!, make_psd_by_minimal_ridge
 
 # --- helpers ---
@@ -669,6 +669,86 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     
     return return_sigma ? (; Ωa, Ωg, Ωl, sigma_u2 = σ2_u) : (; Ωa, Ωg, Ωl)
 
+end
+
+"""
+    estimate_repeated_component_omega(df, component, N1, N2, T, sigma_u2, beta_hat; ...)
+
+Estimate the full repeated-component Ω block directly (instead of estimating
+a small block and repeating via kron).
+
+When a component is "redrawn" each period (or each j for λ), the covariance
+block should capture the full cross-period (or cross-j) structure.  This function
+forms outer products of the appropriately-sized vectors and averages them across
+the "constant" dimension.
+
+- `:i` (repeat_α): residuals from "gamma_lambda", average outer products of
+  N1·T vectors across j → (N1·T)×(N1·T) block
+- `:j` (repeat_γ): residuals from "alpha_lambda", average outer products of
+  N2·T vectors across i → (N2·T)×(N2·T) block
+- `:t` (repeat_λ): residuals from "alpha_gamma", average outer products of
+  N2·T vectors across i → (N2·T)×(N2·T) block
+
+Assumes `df` is ordered with i-fastest, then j, then t.
+"""
+function estimate_repeated_component_omega(df::DataFrame, component::Symbol,
+                                           N1::Int, N2::Int, T::Int,
+                                           sigma_u2::Real, beta_hat::Real;
+                                           x_col::Symbol=:x, y_col::Symbol=:y,
+                                           subtract_sigma_u2::Bool=false,
+                                           beta_hat2::Real=0.0, x2_col::Symbol=:x2,
+                                           use_x2::Bool=false)
+
+    suffix = component === :i ? "gamma_lambda" :
+             component === :j ? "alpha_lambda" :
+             component === :t ? "alpha_gamma" :
+             error("component must be :i, :j, or :t")
+
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix],
+                          x2_col=x2_col, use_x2=use_x2)
+    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col,
+                                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
+    @assert length(res) == N1 * N2 * T
+
+    A = reshape(res, N1, N2, T)  # [i, j, t]
+
+    if component === :i
+        # α_{i,t}: for each j, form N1·T vector (i-fast, t-slow), outer product, average over j
+        block_size = N1 * T
+        Ω = zeros(block_size, block_size)
+        @inbounds for j in 1:N2
+            v = vec(A[:, j, :])  # N1·T, i-fast then t (Julia column-major)
+            Ω .+= v * v'
+        end
+        Ω ./= N2
+
+    elseif component === :j
+        # γ_{j,t}: for each i, form N2·T vector (j-fast, t-slow), outer product, average over i
+        block_size = N2 * T
+        Ω = zeros(block_size, block_size)
+        @inbounds for i in 1:N1
+            v = vec(A[i, :, :])  # N2·T, j-fast then t (column-major of N2×T slice)
+            Ω .+= v * v'
+        end
+        Ω ./= N1
+
+    else  # :t
+        # λ_{j,t}: for each i, form N2·T vector (j-fast, t-slow), outer product, average over i
+        # Note: this matches the Sλ column ordering (j-fast, t-slow)
+        block_size = N2 * T
+        Ω = zeros(block_size, block_size)
+        @inbounds for i in 1:N1
+            v = vec(A[i, :, :])  # N2·T, j-fast then t
+            Ω .+= v * v'
+        end
+        Ω ./= N1
+    end
+
+    if subtract_sigma_u2
+        diag_dominance_safe_subtract!(Ω, sigma_u2)
+    end
+
+    return Symmetric(Matrix(Ω))
 end
 
 "Build Sα, Sγ, Sλ per your repeat rules (n × cols)."
