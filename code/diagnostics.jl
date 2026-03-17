@@ -34,7 +34,7 @@ function smoke_diagnosis!(; params::NamedTuple)
     N1, N2, T = p.N1, st.sizes.N2, st.sizes.T
 
     # --- Build y, correct ordering (i fastest) ---
-    RCBetaEstimators.add_y!(df; beta=p.beta_true, constant=p.c_true, x_col=:x)
+    RCBetaEstimators.add_y!(df; beta=p.beta_true, constant=p.c_true, x_col=:x, beta2=get(p, :beta2_true, 0.0), use_x2_dgp=get(p, :use_x2_dgp, false))
     sort!(df, [:t, :j, :i])
 
     # --- FGLS1 Ω̂₁ (no GLS run) ---
@@ -51,7 +51,8 @@ function smoke_diagnosis!(; params::NamedTuple)
         run_gls   = false,
         shrinkage = p.fgls_shrinkage,
         project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
-        spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8)
+        spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8),
+        use_x2 = get(p, :use_x2_est, false)
     )
 
     do_plots = get(p, :smoke_plot_omega_heatmaps, true)
@@ -88,6 +89,7 @@ function smoke_diagnosis!(; params::NamedTuple)
         shrinkage = p.fgls_shrinkage,
         project_spd = (:fgls_project_spd ∈ propertynames(p) ? p.fgls_project_spd : false),
         spd_floor   = (:fgls_spd_floor   ∈ propertynames(p) ? p.fgls_spd_floor   : 1e-8),
+        use_x2 = get(p, :use_x2_est, false),
         # --- debug only ---
         debug=p.smoke_test_debug_print,
         debug_truth=(; Ωi_star=Ωi_true, Ωj_star=Ωj_true, Ωt_star=Ωt_true),

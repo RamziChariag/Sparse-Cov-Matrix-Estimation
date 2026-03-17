@@ -118,7 +118,10 @@ function main()
             gls_shrinkage  = p.gls_shrinkage,
             gls_project_spd= p.gls_project_spd,
             gls_spd_floor  = p.gls_spd_floor,
-            sigma_u2_oracle= p.sigma_u^2
+            sigma_u2_oracle= p.sigma_u^2,
+            use_x2_dgp = get(p, :use_x2_dgp, false),
+            use_x2_est = get(p, :use_x2_est, false),
+            beta2_true = get(p, :beta2_true, 0.0)
         )
         RCEstimation.print_estimate_summary(res; beta_true=p.beta_true)
     end

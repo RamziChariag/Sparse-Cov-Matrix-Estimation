@@ -20,13 +20,13 @@ const PARAMS = (;
     # If toggled, replace the corresponding FE *and* :t with an interaction FE:
     #   fe_alphaT = true  => use :alphaT = (i,t), and drop :i and :t
     #   fe_gammaT = true  => use :gammaT = (j,t), and drop :j and :t
-    fe_alphaT = false,
+    fe_alphaT = true,
     fe_gammaT = false,
 
     # --- FGLS controls ---
     # --- Estimation-side Ω block choices ---
     i_block_est = true,   # true ⇒ estimate full SPD Ωα; false ⇒ diagonal I * σ²_α 
-    j_block_est = true,
+    j_block_est = false,
     t_block_est = false,
     # --- Repeat patterns for estimation-side Ω ---
     # For FGLS1:
@@ -75,7 +75,7 @@ const PARAMS = (;
     # --- Covariance structure toggles (per dimension) ---
     # true = full SPD covariance, false = homoskedastic diagonal
     i_block = true,
-    j_block = true,
+    j_block = false,
     t_block = false,
 
     # --- Draw modes ---
@@ -98,7 +98,17 @@ const PARAMS = (;
 
     # --- X and U ---
     mu_x = 1.0,  sigma_x = 1.0,
+    mu_x2 = 0.0, sigma_x2 = 1.0,       # x2 distribution parameters
     mu_u = 0.0,  sigma_u = 1.0,
+
+    # --- Second regressor (x2) controls ---
+    beta2_true = 2.0,                    # true β₂ (only matters if use_x2_dgp=true)
+    use_x2_dgp = false,                  # include x2 in y-generation (DGP)
+    use_x2_est = false,                  # include x2 as a regressor in estimation
+    correlate_x = false,                 # draw (x1,x2) jointly from bivariate normal
+    rho_x = 0.5,                         # correlation between x1 and x2 (if correlate_x)
+    correlate_x_alpha = false,           # correlate x with alpha (i fixed effect)
+    rho_x_alpha = 0.5,                   # correlation strength between x and alpha
 
     # --- Plotting controls ---
     # If you comment this line out, plotting will use the default Plots.jl theme.
@@ -127,6 +137,12 @@ const PARAMS = (;
     # bounds by *n* for asymptotic plots (optional)
      asym_min_n = 600,
      asym_max_n = 10000,
+
+    # --- Beta density & t-statistic distribution plots ---
+    make_beta_density_plots = false,     # plot β̂ density across reps for each estimator
+    make_tstat_plots = false,            # plot t-statistic distribution across reps
+    beta_density_estimators = ["OLS","OLS FE","FGLS1","FGLS2","GLS"],
+    tstat_estimators        = ["OLS","OLS FE","FGLS1","FGLS2","GLS"],
 
     # distribution styling (optional)
     dist_bins = 30,

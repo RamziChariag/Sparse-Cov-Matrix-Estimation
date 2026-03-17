@@ -12,10 +12,14 @@ export add_y!, within_transform!, ols_estimation, ols, fe_ols, gls, fgls1, fgls2
 # Helpers
 # -----------------------------
 
-"Compute y = c + β·x + fe_i + fe_j + fe_t + u_ijt (adds/overwrites :y)."
-function add_y!(df::DataFrame; beta::Real, constant::Real=0.0, x_col::Symbol=:x)
+"Compute y = c + β₁·x + [β₂·x2] + fe_i + fe_j + fe_t + u_ijt (adds/overwrites :y)."
+function add_y!(df::DataFrame; beta::Real, constant::Real=0.0, x_col::Symbol=:x,
+                beta2::Real=0.0, x2_col::Symbol=:x2, use_x2_dgp::Bool=false)
     @assert all(Symbol.([:fe_i,:fe_j,:fe_t,:u_ijt]) .∈ Ref(Symbol.(names(df)))) "Missing FE/u columns"
     df[!, :y] = constant .+ beta .* df[!, x_col] .+ df.fe_i .+ df.fe_j .+ df.fe_t .+ df.u_ijt
+    if use_x2_dgp && x2_col in Symbol.(names(df))
+        df[!, :y] .+= beta2 .* df[!, x2_col]
+    end
     return df
 end
 
@@ -195,28 +199,45 @@ function fe_df_resid(df::DataFrame, group_vars::Vector{Symbol}, kx::Int)
     return n - (kx + rank_fe)
 end
 
-"Raw-data OLS on a DataFrame (adds an intercept automatically)."
+"Raw-data OLS on a DataFrame (adds an intercept automatically). Optionally includes x2."
 function ols(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
-             vcov::Symbol=:HC1, cluster_col::Union{Nothing,Symbol}=nothing)
+             vcov::Symbol=:HC1, cluster_col::Union{Nothing,Symbol}=nothing,
+             use_x2::Bool=false, x2_col::Symbol=:x2)
     n = nrow(df)
     x = df[!, x_col]                  # Vector
-    X = hcat(ones(eltype(x), n), x)   # n×2 Matrix (intercept + x)
+    if use_x2 && x2_col in Symbol.(names(df))
+        X = hcat(ones(eltype(x), n), x, df[!, x2_col])  # n×3 (intercept + x + x2)
+    else
+        X = hcat(ones(eltype(x), n), x)   # n×2 Matrix (intercept + x)
+    end
     y = Vector(df[!, y_col])
     cl = cluster_col === nothing ? nothing : Vector(df[!, cluster_col])
     return ols_estimation(X, y; vcov=vcov, cluster=cl)
 end
 
-"FE OLS on a DataFrame (within-transform, then OLS without intercept)."
+"FE OLS on a DataFrame (within-transform, then OLS without intercept). Optionally includes x2."
 function fe_ols(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
                 group_vars::Vector{Symbol} = [:i,:j,:t],
-                vcov::Symbol=:HC1, cluster_col::Union{Nothing,Symbol}=nothing)
+                vcov::Symbol=:HC1, cluster_col::Union{Nothing,Symbol}=nothing,
+                use_x2::Bool=false, x2_col::Symbol=:x2)
     suffix = within_transform!(df; x_col=x_col, y_col=y_col, group_vars=group_vars)
     xt = Symbol(string(x_col), "_tilde_", suffix)
     yt = Symbol(string(y_col), "_tilde_", suffix)
-    X = reshape(df[!, xt], :, 1)      # n×1 Matrix (no intercept after within)
+
+    kx = 1  # number of regressors
+    if use_x2 && x2_col in Symbol.(names(df))
+        # Also within-transform x2 (reuses the same suffix/group_vars)
+        within_transform!(df; x_col=x2_col, y_col=y_col, group_vars=group_vars)
+        x2t = Symbol(string(x2_col), "_tilde_", suffix)
+        X = hcat(df[!, xt], df[!, x2t])   # n×2 (x_tilde, x2_tilde)
+        kx = 2
+    else
+        X = reshape(df[!, xt], :, 1)      # n×1 Matrix (no intercept after within)
+    end
+
     y = Vector(df[!, yt])
     cl = cluster_col === nothing ? nothing : Vector(df[!, cluster_col])
-    df_resid = fe_df_resid(df, group_vars, 1)
+    df_resid = fe_df_resid(df, group_vars, kx)
     return ols_estimation(X, y; vcov=vcov, cluster=cl, df_resid=df_resid)
 end
 
@@ -224,12 +245,17 @@ end
 # GLS / FGLS
 # -----------------------------
 
-"GLS on a DataFrame: uses a given full Ω (n×n). Includes intercept like raw OLS."
-function gls(df::DataFrame, Ω::AbstractMatrix; x_col::Symbol=:x, y_col::Symbol=:y)
+"GLS on a DataFrame: uses a given full Ω (n×n). Includes intercept like raw OLS. Optionally includes x2."
+function gls(df::DataFrame, Ω::AbstractMatrix; x_col::Symbol=:x, y_col::Symbol=:y,
+             use_x2::Bool=false, x2_col::Symbol=:x2)
 
     n = nrow(df)
     x = df[!, x_col]
-    X = hcat(ones(eltype(x), n), x)   # intercept + x
+    if use_x2 && x2_col in Symbol.(names(df))
+        X = hcat(ones(eltype(x), n), x, df[!, x2_col])  # intercept + x + x2
+    else
+        X = hcat(ones(eltype(x), n), x)   # intercept + x
+    end
     y = Vector(df[!, y_col])
 
     # Solve Ω^{-1}X and Ω^{-1}y (prefer Cholesky if SPD)
@@ -260,7 +286,7 @@ FGLS1 on a DataFrame:
 5) Ω̂ = SαΩαSα' + SγΩγSγ' + SλΩλSλ' + σ²_u I
 6) GLS with Ω̂
 
-Returns (β̂_fgls1, ê, V̂_fgls1, Ω̂).
+Returns (β̂_fgls1, ê, V̂_fgls1, Ω̂).
 """
 function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
               x_col::Symbol=:x, y_col::Symbol=:y,
@@ -271,25 +297,29 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
               subtract_sigma_u2_fgls1::Bool=false,
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,            # keep your shrinkage if you pass it
-              project_spd::Bool=false, spd_floor::Real=1e-8)
+              project_spd::Bool=false, spd_floor::Real=1e-8,
+              use_x2::Bool=false, x2_col::Symbol=:x2)
 
     # 1) OLS for initial β̂
-    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
+    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none, use_x2=use_x2, x2_col=x2_col)
 
-    # 2) σ² components
+    # 2) σ² components (use slope for x1 only; pass x2 info for proper residuals)
+    beta_hat2 = (use_x2 && length(β̂_ols) >= 3) ? β̂_ols[3] : 0.0
     sigmas = RCOmegaEstimators.estimate_homoskedastic_component_variances(
-        df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col)
+        df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col,
+        beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     σu2 = sigmas.sigma_u2
 
     # 3) base blocks Ω̂ᵢ, Ω̂ⱼ, Ω̂ₜ
     blocks = RCOmegaEstimators.estimate_omegas(
         df, N1, N2, T, sigmas, β̂_ols[2];
-        x_col=x_col,                  
+        x_col=x_col,
         i_block_est=i_block_est,
         j_block_est=j_block_est,
         t_block_est=t_block_est,
         subtract_sigma_u2 = subtract_sigma_u2_fgls1,
-        two_step=false
+        two_step=false,
+        beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2
     )
     Ωa, Ωg, Ωl = blocks.Ωa, blocks.Ωg, blocks.Ωl
 
@@ -307,7 +337,7 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
     if shrinkage != 1.0
         Ω̂ = RCOmegaEstimators.shrink_offdiagonal!(Ω̂, shrinkage)
     end
-    
+
     if project_spd
         Ω̂ = RCOmegaEstimators.project_to_spd(Ω̂; floor=spd_floor)
     end
@@ -323,14 +353,15 @@ function fgls1(df::DataFrame, N1::Int, N2::Int, T::Int;
         return nothing, nothing, nothing, Ω̂
     end
 
-    β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col)
-    return β̂_fgls, ê, V̂, Ω̂
+    β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col, use_x2=use_x2, x2_col=x2_col)
+    return β̂_fgls, ê, V̂, Ω̂
 end
+
 
 """
 FGLS2 on a DataFrame using two-step averaging of residual vectors.
 
-Returns (β̂_fgls2, ê, V̂_fgls2, Ω̂).
+Returns (β̂_fgls2, ê, V̂_fgls2, Ω̂).
 """
 function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               x_col::Symbol=:x, y_col::Symbol=:y,
@@ -342,21 +373,24 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
               run_gls::Bool=true, print_omega::Bool=false,
               shrinkage::Real=1.0,
               project_spd::Bool=false, spd_floor::Real=1e-8,
+              use_x2::Bool=false, x2_col::Symbol=:x2,
               # --- debug-only ---
               debug::Bool=false,
               debug_truth::Union{Nothing,NamedTuple}=nothing,  # e.g., (Ωi_star=..., Ωj_star=..., Ωt_star=...)
               debug_digits::Int=3)
 
     # 0) Sort data with i fastest, then j then t
-    df = RCOmegaEstimators.sort_for_dim(df, :i)  
+    df = RCOmegaEstimators.sort_for_dim(df, :i)
 
     # 1) OLS for initial β̂
-    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none)
+    β̂_ols, _, _ = ols(df; x_col=x_col, y_col=y_col, vcov=:none, use_x2=use_x2, x2_col=x2_col)
 
     # 2) σ² Homoskedastic components (needed if any block is not estimated,
     #    and for homoskedastic diagonals in those cases)
+    beta_hat2 = (use_x2 && length(β̂_ols) >= 3) ? β̂_ols[3] : 0.0
     sigmas = RCOmegaEstimators.estimate_homoskedastic_component_variances(
-        df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col
+        df, N1, N2, T, β̂_ols[2]; x_col=x_col, y_col=y_col,
+        beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2
     )
 
     # 3) get blocks + pooled σ̂_u^2 via two-step
@@ -371,13 +405,14 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         subtract_sigma_u2 = subtract_sigma_u2_fgls2,
         repeat_alpha_fgls2 = repeat_alpha,
         repeat_gamma_fgls2 = repeat_gamma,
-        repeat_lambda_fgls2 = repeat_lambda
+        repeat_lambda_fgls2 = repeat_lambda,
+        beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2
     )
     Ωi, Ωj, Ωt = blocks.Ωa, blocks.Ωg, blocks.Ωl
     # This uses fgls2 σ̂_u^2 from two-step
-    σ2_u = blocks.sigma_u2 
+    σ2_u = blocks.sigma_u2
 
-    # This uses threeway fixed effects residuals to estimate σ̂_u^2   
+    # This uses threeway fixed effects residuals to estimate σ̂_u^2
     #σ2_u = sigmas.sigma_u2
 
          # ===== DEBUG PRINT (small blocks + sigma pieces) =====
@@ -442,7 +477,7 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
 
     # 6) Assemble Ω with σ̂_u^2 I
     Ω̂ = RCOmegaEstimators.construct_omega(Ωi, Ωj, Ωt, Sα, Sγ, Sλ, σ2_u)
-    
+
          # ===== DEBUG PRINT (full Ω̂ diagnostics) =====
 
     if debug
@@ -480,15 +515,15 @@ function fgls2(df::DataFrame, N1::Int, N2::Int, T::Int;
         return nothing, nothing, nothing, Ω̂
     end
 
-    β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col)
-    return β̂_fgls, ê, V̂, Ω̂
+    β̂_fgls, ê, V̂ = gls(df, Ω̂; x_col=x_col, y_col=y_col, use_x2=use_x2, x2_col=x2_col)
+    return β̂_fgls, ê, V̂, Ω̂
 end
 
 
 """
 Oracle GLS using true small blocks (Ωᵢ, Ωⱼ, Ωₜ) from the DGP.
 
-Returns (β̂_gls, ê_gls, V̂_gls, Ω★).
+Returns (β̂_gls, ê_gls, V̂_gls, Ω★).
 Assumes rows are ordered with i fastest (sort!(df, [:t,:j,:i])) to match S.
 """
 function oracle_gls(df::DataFrame,
@@ -497,7 +532,8 @@ function oracle_gls(df::DataFrame,
                     x_col::Symbol=:x, y_col::Symbol=:y,
                     repeat_alpha::Bool=true, repeat_gamma::Bool=false, repeat_lambda::Bool=false,
                     sigma_u2::Real=1.0,
-                    shrinkage::Real=1.0, project_spd::Bool=false, spd_floor::Real=1e-8)
+                    shrinkage::Real=1.0, project_spd::Bool=false, spd_floor::Real=1e-8,
+                    use_x2::Bool=false, x2_col::Symbol=:x2)
 
     # Base blocks
     Ωa, Ωg, Ωl = Ωi, Ωj, Ωt
@@ -529,8 +565,8 @@ function oracle_gls(df::DataFrame,
     end
 
     # GLS
-    β̂, ê, V̂ = gls(df, Ωstar; x_col=x_col, y_col=y_col)
-    return β̂, ê, V̂, Ωstar
+    β̂, ê, V̂ = gls(df, Ωstar; x_col=x_col, y_col=y_col, use_x2=use_x2, x2_col=x2_col)
+    return β̂, ê, V̂, Ωstar
 end
 
 end # module

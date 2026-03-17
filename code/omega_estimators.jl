@@ -83,7 +83,8 @@ end
 
 "Ensure within-tilde columns for needed suffix exist (computes them if missing)."
 function ensure_tilde_columns!(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y,
-                               suffixes::Vector{String}=String[])
+                               suffixes::Vector{String}=String[],
+                               x2_col::Symbol=:x2, use_x2::Bool=false)
     needed = Set(suffixes)
     # what we might need
     candidates = Dict(
@@ -99,11 +100,22 @@ function ensure_tilde_columns!(df::DataFrame; x_col::Symbol=:x, y_col::Symbol=:y
             yt = Symbol(string(y_col), "_tilde_", suf)
             if !(xt in propertynames(df)) || !(yt in propertynames(df))
                 # Bring in the within transformer from beta_estimators
-                # (we don't import it here to avoid a circular dep; call via Main module path)
+                # (we don’t import it here to avoid a circular dep; call via Main module path)
                 if isdefined(Main, :RCBetaEstimators)
                     Main.RCBetaEstimators.within_transform!(df; x_col=x_col, y_col=y_col, group_vars=gv)
                 else
                     error("within_transform! not available. Include beta_estimators.jl before calling Ω-estimators.")
+                end
+            end
+            # If use_x2 is true, also create tilde columns for x2
+            if use_x2
+                x2t = Symbol(string(x2_col), "_tilde_", suf)
+                if !(x2t in propertynames(df))
+                    if isdefined(Main, :RCBetaEstimators)
+                        Main.RCBetaEstimators.within_transform!(df; x_col=x2_col, y_col=y_col, group_vars=gv)
+                    else
+                        error("within_transform! not available. Include beta_estimators.jl before calling Ω-estimators.")
+                    end
                 end
             end
         end
@@ -113,11 +125,18 @@ end
 
 "Residuals from tilde columns with `suffix` (ỹ - β̂ x̃)."
 function residuals_from_suffix(df::DataFrame, suffix::AbstractString, beta_hat::Real;
-                               x_col::Symbol=:x, y_col::Symbol=:y)
+                               x_col::Symbol=:x, y_col::Symbol=:y,
+                               beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
     xt = Symbol(string(x_col), "_tilde_", suffix)
     yt = Symbol(string(y_col), "_tilde_", suffix)
     @assert xt in propertynames(df) && yt in propertynames(df) "Missing tilde columns for suffix=$suffix"
-    return df[!, yt] .- beta_hat .* df[!, xt]
+    resid = df[!, yt] .- beta_hat .* df[!, xt]
+    if use_x2
+        x2t = Symbol(string(x2_col), "_tilde_", suffix)
+        @assert x2t in propertynames(df) "Missing tilde column for x2: $x2t"
+        resid = resid .- beta_hat2 .* df[!, x2t]
+    end
+    return resid
 end
 
 "Arithmetic mean of clusterwise outer products of length `block_size` chunks."
@@ -234,19 +253,25 @@ end
 
 "σ²_u and σ²_α/γ/λ via differences of within-residual means."
 function estimate_homoskedastic_component_variances(df::DataFrame, N1::Int, N2::Int, T::Int,
-                                                    beta_hat::Real; x_col::Symbol=:x, y_col::Symbol=:y)
+                                                    beta_hat::Real; x_col::Symbol=:x, y_col::Symbol=:y,
+                                                    beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
     ensure_tilde_columns!(df; x_col=x_col, y_col=y_col,
-                          suffixes=["alpha_gamma_lambda","alpha_gamma","alpha_lambda","gamma_lambda"])
-    res_full = residuals_from_suffix(df, "alpha_gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+                          suffixes=["alpha_gamma_lambda","alpha_gamma","alpha_lambda","gamma_lambda"],
+                          x2_col=x2_col, use_x2=use_x2)
+    res_full = residuals_from_suffix(df, "alpha_gamma_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                     beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     σu2 = mean(res_full .^ 2)
 
-    res_l = residuals_from_suffix(df, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+    res_l = residuals_from_suffix(df, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col,
+                                  beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     σλ2 = var(res_l; corrected=true) - σu2
 
-    res_g = residuals_from_suffix(df, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+    res_g = residuals_from_suffix(df, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                  beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     σγ2 = var(res_g; corrected=true) - σu2
 
-    res_a = residuals_from_suffix(df, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+    res_a = residuals_from_suffix(df, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                  beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     σα2 = var(res_a; corrected=true) - σu2
 
     return (; sigma_u2 = σu2, sigma_alpha2 = σα2, sigma_gamma2 = σγ2, sigma_lambda2 = σλ2)
@@ -271,7 +296,8 @@ Estimator: raw moment (divide by the number of “other-dimension” combination
 function generate_single_component_omega(df::DataFrame, component::Symbol, N1::Int, N2::Int, T::Int,
                                          sigma_u2::Real, beta_hat::Real;
                                          x_col::Symbol=:x, y_col::Symbol=:y,
-                                         do_ridge::Bool=false)
+                                         do_ridge::Bool=false,
+                                         beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
 
     # Pick the residual suffix for the component (no sorting; use df as-is)
     suffix = component === :i ? "gamma_lambda" :
@@ -279,8 +305,10 @@ function generate_single_component_omega(df::DataFrame, component::Symbol, N1::I
              component === :t ? "alpha_gamma" :
              error("component must be :i, :j, or :t")
 
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix])
-    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col)
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix],
+                          x2_col=x2_col, use_x2=use_x2)
+    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col,
+                                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     @assert length(res) == N1 * N2 * T "Residual vector has wrong length."
 
     # Reshape to A[i,j,t] under the canonical DGP order (i fastest → j → t)
@@ -321,7 +349,8 @@ function generate_single_component_omega_with_demeaning(df::DataFrame, component
                                                         N1::Int, N2::Int, T::Int,
                                                         sigma_u2::Real, beta_hat::Real;
                                                         x_col::Symbol=:x, y_col::Symbol=:y,
-                                                        do_ridge::Bool=false)
+                                                        do_ridge::Bool=false,
+                                                        beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
 
     # Pick residual suffix (no sorting; use df as-is, i-fastest expected)
     suffix = component === :i ? "gamma_lambda" :
@@ -329,8 +358,10 @@ function generate_single_component_omega_with_demeaning(df::DataFrame, component
              component === :t ? "alpha_gamma" :
              error("component must be :i, :j, or :t")
 
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix])
-    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col)
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=[suffix],
+                          x2_col=x2_col, use_x2=use_x2)
+    res = residuals_from_suffix(df, suffix, beta_hat; x_col=x_col, y_col=y_col,
+                                beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
     @assert length(res) == N1 * N2 * T "Residual vector has wrong length."
 
     # A[i,j,t] with i-fastest → j → t
@@ -386,13 +417,16 @@ function sigmas_fgls2_double_diff(df::DataFrame, N1::Int, N2::Int, T::Int, beta_
                                  x_col::Symbol=:x, y_col::Symbol=:y,
                                  repeat_alpha_fgls2::Bool,
                                  repeat_gamma_fgls2::Bool,
-                                 repeat_lambda_fgls2::Bool)
+                                 repeat_lambda_fgls2::Bool,
+                                 beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
 
     # ------------------------------------------------------------
     # (1) sigma_u2
     # ------------------------------------------------------------
-    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma_lambda"])
-    res_u = residuals_from_suffix(df, "alpha_gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+    ensure_tilde_columns!(df; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma_lambda"],
+                          x2_col=x2_col, use_x2=use_x2)
+    res_u = residuals_from_suffix(df, "alpha_gamma_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                  beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
     σ2_u = 0.0
     if !(repeat_alpha_fgls2 || repeat_gamma_fgls2 || repeat_lambda_fgls2)
@@ -448,15 +482,17 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                          subtract_sigma_u2::Bool=true,
                          repeat_alpha_fgls2::Bool=false,
                          repeat_gamma_fgls2::Bool=false,
-                         repeat_lambda_fgls2::Bool=false)
+                         repeat_lambda_fgls2::Bool=false,
+                         beta_hat2::Real=0.0, x2_col::Symbol=:x2, use_x2::Bool=false)
 
     if !two_step
         # --- single-step procedure ---
         σu2 = sigmas.sigma_u2
 
-        Ωa = 
+        Ωa =
             if i_block_est
-                Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
+                                                     beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / T from diag
                     diag_dominance_safe_subtract!(Ωα, σu2 / T)
@@ -466,9 +502,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 sigmas.sigma_alpha2 * I(N1)
             end
 
-        Ωg = 
+        Ωg =
             if j_block_est
-                Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
+                                                     beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
                     diag_dominance_safe_subtract!(Ωγ, σu2 / N1)
@@ -478,9 +515,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 sigmas.sigma_gamma2 * I(N2)
             end
 
-        Ωl = 
+        Ωl =
             if t_block_est
-                Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col)
+                Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
+                                                     beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
                     # subtract σ̂_u^2 / N1 from diag
                     diag_dominance_safe_subtract!(Ωλ, σu2 / N1)
@@ -502,7 +540,8 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         x_col=x_col, y_col=y_col,
         repeat_alpha_fgls2=repeat_alpha_fgls2,
         repeat_gamma_fgls2=repeat_gamma_fgls2,
-        repeat_lambda_fgls2=repeat_lambda_fgls2
+        repeat_lambda_fgls2=repeat_lambda_fgls2,
+        beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2
     )
 
     σ2_u = S.sigma_u2
@@ -517,8 +556,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
     # i / α : mean over t for each (i,j); outer product averaged over j
     Ωa = if i_block_est
         dfi = df
-        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         Ωα = two_step_mean_outer_products(res, :i, N1, N2, T)
 
@@ -528,24 +569,35 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         Symmetric(Matrix(Ωα))
     else
         dfi = df
-        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"])
-        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dfi; x_col=x_col, y_col=y_col, suffixes=["gamma_lambda"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dfi, "gamma_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         A = reshape(res, N1, N2, T)  # [i, j, t]
-        rbar_i = Vector{Float64}(undef, N1)
-        @inbounds for i in 1:N1
-            rbar_i[i] = mean(@view A[i, :, :])   # avg over (j,t) at fixed i
+        if repeat_alpha_fgls2
+            # α redrawn each t: average over j only → N1×T matrix
+            rbar_it = dropdims(mean(A; dims=2), dims=2)  # N1×T
+            # For each t, compute cross-i variance, then average over t
+            σ2α = mean([var(rbar_it[:, t]; corrected=true) for t in 1:T]) - σ2_u / N2
+            σ2α = max(0.0, σ2α)
+        else
+            rbar_i = Vector{Float64}(undef, N1)
+            @inbounds for i in 1:N1
+                rbar_i[i] = mean(@view A[i, :, :])   # avg over (j,t) at fixed i
+            end
+            σ2α = max(0.0, var(rbar_i; corrected=true) - σ2_u / (N2*T))
         end
-
-        σ2α = max(0.0, var(rbar_i; corrected=true) - σ2_u / (N2*T))
         σ2α * I(N1)
     end
 
     # j / γ : mean over i for each (j,t); outer product averaged over t
     Ωg = if j_block_est
         dfj = df
-        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         Ωγ = two_step_mean_outer_products(res, :j, N1, N2, T)
 
@@ -555,24 +607,35 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         Symmetric(Matrix(Ωγ))
     else
         dfj = df
-        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"])
-        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dfj; x_col=x_col, y_col=y_col, suffixes=["alpha_lambda"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dfj, "alpha_lambda", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         A = reshape(res, N1, N2, T)  # [i, j, t]
-        rbar_j = Vector{Float64}(undef, N2)
-        @inbounds for j in 1:N2
-            rbar_j[j] = mean(@view A[:, j, :])   # avg over (i,t) at fixed j
+        if repeat_gamma_fgls2
+            # γ redrawn each t: average over i only → N2×T matrix
+            rbar_jt = dropdims(mean(A; dims=1), dims=1)  # N2×T
+            # For each t, compute cross-j variance, then average over t
+            σ2γ = mean([var(rbar_jt[:, t]; corrected=true) for t in 1:T]) - σ2_u / N1
+            σ2γ = max(0.0, σ2γ)
+        else
+            rbar_j = Vector{Float64}(undef, N2)
+            @inbounds for j in 1:N2
+                rbar_j[j] = mean(@view A[:, j, :])   # avg over (i,t) at fixed j
+            end
+            σ2γ = max(0.0, var(rbar_j; corrected=true) - σ2_u / (N1*T))
         end
-
-        σ2γ = max(0.0, var(rbar_j; corrected=true) - σ2_u / (N1*T))
         σ2γ * I(N2)
     end
 
     # t / λ : mean over i for each (t,j); outer product averaged over j
     Ωl = if t_block_est
         dft = df
-        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         Ωλ = two_step_mean_outer_products(res, :t, N1, N2, T)
 
@@ -582,16 +645,25 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
         Symmetric(Matrix(Ωλ))
     else
         dft = df
-        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"])
-        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col)
+        ensure_tilde_columns!(dft; x_col=x_col, y_col=y_col, suffixes=["alpha_gamma"],
+                              x2_col=x2_col, use_x2=use_x2)
+        res = residuals_from_suffix(dft, "alpha_gamma", beta_hat; x_col=x_col, y_col=y_col,
+                                    beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
 
         A = reshape(res, N1, N2, T)  # [i, j, t]
-        rbar_t = Vector{Float64}(undef, T)
-        @inbounds for t in 1:T
-            rbar_t[t] = mean(@view A[:, :, t])   # avg over (i,j) at fixed t
+        if repeat_lambda_fgls2
+            # λ redrawn each j: average over i only → N2×T matrix
+            Y = dropdims(mean(A; dims=1), dims=1)  # N2×T
+            # For each j, compute cross-t variance, then average over j
+            σ2λ = mean([var(Y[j, :]; corrected=true) for j in 1:N2]) - σ2_u / N1
+            σ2λ = max(0.0, σ2λ)
+        else
+            rbar_t = Vector{Float64}(undef, T)
+            @inbounds for t in 1:T
+                rbar_t[t] = mean(@view A[:, :, t])   # avg over (i,j) at fixed t
+            end
+            σ2λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
         end
-
-        σ2λ = max(0.0, var(rbar_t; corrected=true) - σ2_u / (N1*N2))
         σ2λ * I(T)
     end
     

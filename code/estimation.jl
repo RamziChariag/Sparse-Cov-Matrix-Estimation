@@ -23,6 +23,10 @@ Estimator controls (pull these from params.jl):
 - cluster_col_ols::Union{Nothing,Symbol} = nothing
 - cluster_col_fe::Union{Nothing,Symbol}  = nothing
 
+X2 controls (optional):
+- use_x2_dgp::Bool=false, use_x2_est::Bool=false
+- beta2_true::Real=0.0, x2_col::Symbol=:x2
+
 FGLS controls (per-dimension Ω choice for estimation):
 - i_block_est::Bool=true   # true => full SPD for i; false => homoskedastic diagonal
 - j_block_est::Bool=false
@@ -58,6 +62,10 @@ function estimate_all(df::DataFrame;
     cluster_col_ols::Union{Nothing,Symbol}=nothing,
     cluster_col_fe::Union{Nothing,Symbol}=nothing,
 
+    # X2 controls
+    use_x2_dgp::Bool=false, use_x2_est::Bool=false,
+    beta2_true::Real=0.0, x2_col::Symbol=:x2,
+
     # OLS FE
     fe_alphaT::Bool=false,
     fe_gammaT::Bool=false,
@@ -78,11 +86,13 @@ function estimate_all(df::DataFrame;
     sigma_u2_oracle::Real=1.0,
 )
     # 0) Build y (idempotent)
-    RCBetaEstimators.add_y!(df; beta=beta_true, constant=c_true, x_col=:x)
+    RCBetaEstimators.add_y!(df; beta=beta_true, constant=c_true, x_col=:x,
+                            beta2=beta2_true, x2_col=x2_col, use_x2_dgp=use_x2_dgp)
 
     # 1) OLS (raw, with intercept)
     β_ols, e_ols, V_ols = RCBetaEstimators.ols(df; x_col=:x, y_col=:y,
-                                              vcov=vcov_ols, cluster_col=cluster_col_ols)
+                                              vcov=vcov_ols, cluster_col=cluster_col_ols,
+                                              use_x2=use_x2_est, x2_col=x2_col)
     se_ols = sqrt.(max.(diag(V_ols), 0))  
 
     # 2) FE-OLS (default: i+j+t; optionally swap in interaction FEs)
@@ -97,7 +107,8 @@ function estimate_all(df::DataFrame;
 
     β_fe, e_fe, V_fe = RCBetaEstimators.fe_ols(df; x_col=:x, y_col=:y,
                                                group_vars=fe_group_vars,
-                                               vcov=vcov_fe, cluster_col=cluster_col_fe)
+                                               vcov=vcov_fe, cluster_col=cluster_col_fe,
+                                               use_x2=use_x2_est, x2_col=x2_col)
     se_fe = sqrt.(max.(diag(V_fe), 0))
 
     # Prepare a view with correct row order for (F)GLS (i fastest ⇒ [:t,:j,:i])
@@ -119,7 +130,9 @@ function estimate_all(df::DataFrame;
             run_gls       = true,
             shrinkage     = fgls_shrinkage,
             project_spd   = fgls_project_spd,
-            spd_floor     = fgls_spd_floor
+            spd_floor     = fgls_spd_floor,
+            use_x2        = use_x2_est,
+            x2_col        = x2_col
         )
     catch err
         @warn "FGLS1 failed" exception=(err, catch_backtrace()) n=nrow(df) p=ncol(df) N1=N1 N2=N2 T=T
@@ -128,7 +141,7 @@ function estimate_all(df::DataFrame;
         se_fgls1 = sqrt.(max.(diag(V_fgls1), 0))
     end
 
-    # 3b) FGLS2 
+    # 3b) FGLS2
     β_fgls2 = nothing; e_fgls2 = nothing; V_fgls2 = nothing; Ωhat2 = nothing; se_fgls2 = nothing
     try
         β_fgls2, e_fgls2, V_fgls2, Ωhat2 = RCBetaEstimators.fgls2(
@@ -144,7 +157,9 @@ function estimate_all(df::DataFrame;
             run_gls       = true,
             shrinkage     = fgls_shrinkage,
             project_spd   = fgls_project_spd,
-            spd_floor     = fgls_spd_floor
+            spd_floor     = fgls_spd_floor,
+            use_x2        = use_x2_est,
+            x2_col        = x2_col
         )
     catch err
         @warn "FGLS2 failed" exception=(err, catch_backtrace()) n=nrow(df) p=ncol(df) N1=N1 N2=N2 T=T
@@ -163,7 +178,9 @@ function estimate_all(df::DataFrame;
                 sigma_u2     = sigma_u2_oracle,
                 shrinkage    = gls_shrinkage,
                 project_spd  = gls_project_spd,
-                spd_floor    = gls_spd_floor
+                spd_floor    = gls_spd_floor,
+                use_x2       = use_x2_est,
+                x2_col       = x2_col
             )
         catch err
             @warn "Oracle GLS failed" exception=(err, catch_backtrace()) n=nrow(df) p=ncol(df) N1=N1 N2=N2 T=T
@@ -272,6 +289,19 @@ function mc_estimate_over_sizes(; params::NamedTuple,
         β_gls   = Vector{Union{Missing,Float64}}(undef, reps_here)
         v_gls   = Vector{Union{Missing,Float64}}(undef, reps_here)
 
+        # X2 storage (if needed)
+        use_x2_est = get(p, :use_x2_est, false)
+        β2_ols   = use_x2_est ? Vector{Float64}(undef, reps_here) : nothing
+        v2_ols   = use_x2_est ? Vector{Float64}(undef, reps_here) : nothing
+        β2_fe    = use_x2_est ? Vector{Float64}(undef, reps_here) : nothing
+        v2_fe    = use_x2_est ? Vector{Float64}(undef, reps_here) : nothing
+        β2_fgls1 = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+        v2_fgls1 = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+        β2_fgls2 = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+        v2_fgls2 = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+        β2_gls   = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+        v2_gls   = use_x2_est ? Vector{Union{Missing,Float64}}(undef, reps_here) : nothing
+
         inner = progress_reps ? Progress(reps_here; dt=0.1, desc="N2=$N2, T=$T (n=$n)") : nothing
         lk = ReentrantLock()
 
@@ -289,6 +319,12 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                     sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
                     mu_x=p.mu_x, sigma_x=p.sigma_x,
                     mu_u=p.mu_u, sigma_u=p.sigma_u,
+                    mu_x2=get(p, :mu_x2, 0.0),
+                    sigma_x2=get(p, :sigma_x2, 1.0),
+                    correlate_x=get(p, :correlate_x, false),
+                    rho_x=get(p, :rho_x, 0.5),
+                    correlate_x_alpha=get(p, :correlate_x_alpha, false),
+                    rho_x_alpha=get(p, :rho_x_alpha, 0.0),
                     seed=seed_r,
                     Ωi_fixed=Ωi_fixed, Ωj_fixed=Ωj_fixed, Ωt_fixed=Ωt_fixed
                 )
@@ -303,6 +339,11 @@ function mc_estimate_over_sizes(; params::NamedTuple,
                 beta_true=p.beta_true, c_true=p.c_true,
                 vcov_ols=p.vcov_ols, vcov_fe=p.vcov_fe,
                 cluster_col_ols=p.cluster_col_ols, cluster_col_fe=p.cluster_col_fe,
+                # X2 controls
+                use_x2_dgp=get(p, :use_x2_dgp, false),
+                use_x2_est=get(p, :use_x2_est, false),
+                beta2_true=get(p, :beta2_true, 0.0),
+                x2_col=get(p, :x2_col, :x2),
                 # OLS FE
                 fe_alphaT=p.fe_alphaT, fe_gammaT=p.fe_gammaT,
                 # estimation-side Ω toggles
@@ -328,22 +369,45 @@ function mc_estimate_over_sizes(; params::NamedTuple,
             β_ols[r] = res.β_ols[2];  v_ols[r] = res.V_ols[2,2]
             β_fe[r]  = res.β_fe[1];   v_fe[r]  = res.V_fe[1,1]
 
-                        if res.β_fgls1 === nothing
+            if use_x2_est
+                β2_ols[r] = res.β_ols[3];  v2_ols[r] = res.V_ols[3,3]
+                β2_fe[r]  = res.β_fe[2];   v2_fe[r]  = res.V_fe[2,2]
+            end
+
+            if res.β_fgls1 === nothing
                 β_fgls1[r] = missing; v_fgls1[r] = missing
+                if use_x2_est
+                    β2_fgls1[r] = missing; v2_fgls1[r] = missing
+                end
             else
                 β_fgls1[r] = res.β_fgls1[2]; v_fgls1[r] = res.V_fgls1[2,2]
+                if use_x2_est
+                    β2_fgls1[r] = res.β_fgls1[3]; v2_fgls1[r] = res.V_fgls1[3,3]
+                end
             end
 
             if res.β_fgls2 === nothing
                 β_fgls2[r] = missing; v_fgls2[r] = missing
+                if use_x2_est
+                    β2_fgls2[r] = missing; v2_fgls2[r] = missing
+                end
             else
                 β_fgls2[r] = res.β_fgls2[2]; v_fgls2[r] = res.V_fgls2[2,2]
+                if use_x2_est
+                    β2_fgls2[r] = res.β_fgls2[3]; v2_fgls2[r] = res.V_fgls2[3,3]
+                end
             end
 
             if res.β_gls === nothing
                 β_gls[r] = missing; v_gls[r] = missing
+                if use_x2_est
+                    β2_gls[r] = missing; v2_gls[r] = missing
+                end
             else
                 β_gls[r] = res.β_gls[2];  v_gls[r] = res.V_gls[2,2]
+                if use_x2_est
+                    β2_gls[r] = res.β_gls[3];  v2_gls[r] = res.V_gls[3,3]
+                end
             end
 
             
@@ -359,11 +423,27 @@ function mc_estimate_over_sizes(; params::NamedTuple,
         βf2 = collect(skipmissing(β_fgls2)); vf2 = collect(skipmissing(v_fgls2))
         βg = collect(skipmissing(β_gls));  vg = collect(skipmissing(v_gls))
 
+        # X2 statistics
+        β2f1 = use_x2_est ? collect(skipmissing(β2_fgls1)) : []
+        v2f1 = use_x2_est ? collect(skipmissing(v2_fgls1)) : []
+        β2f2 = use_x2_est ? collect(skipmissing(β2_fgls2)) : []
+        v2f2 = use_x2_est ? collect(skipmissing(v2_fgls2)) : []
+        β2g = use_x2_est ? collect(skipmissing(β2_gls)) : []
+        v2g = use_x2_est ? collect(skipmissing(v2_gls)) : []
+
+        beta2_true = get(p, :beta2_true, 0.0)
+
         bias_ols = mean(β_ols .- p.beta_true)
         bias_fe  = mean(β_fe  .- p.beta_true)
         bias_f1  = isempty(βf1) ? NaN : mean(βf1 .- p.beta_true)
         bias_f2  = isempty(βf2) ? NaN : mean(βf2 .- p.beta_true)
         bias_g   = isempty(βg) ? NaN : mean(βg .- p.beta_true)
+
+        bias2_ols = use_x2_est ? mean(β2_ols .- beta2_true) : NaN
+        bias2_fe  = use_x2_est ? mean(β2_fe  .- beta2_true) : NaN
+        bias2_f1  = use_x2_est && !isempty(β2f1) ? mean(β2f1 .- beta2_true) : NaN
+        bias2_f2  = use_x2_est && !isempty(β2f2) ? mean(β2f2 .- beta2_true) : NaN
+        bias2_g   = use_x2_est && !isempty(β2g) ? mean(β2g .- beta2_true) : NaN
 
         var_emp_ols = var(β_ols; corrected=true)
         var_emp_fe  = var(β_fe;  corrected=true)
@@ -371,17 +451,35 @@ function mc_estimate_over_sizes(; params::NamedTuple,
         var_emp_f2  = isempty(βf2) ? NaN : var(βf2; corrected=true)
         var_emp_g   = isempty(βg) ? NaN : var(βg; corrected=true)
 
+        var2_emp_ols = use_x2_est ? var(β2_ols; corrected=true) : NaN
+        var2_emp_fe  = use_x2_est ? var(β2_fe; corrected=true) : NaN
+        var2_emp_f1  = use_x2_est && !isempty(β2f1) ? var(β2f1; corrected=true) : NaN
+        var2_emp_f2  = use_x2_est && !isempty(β2f2) ? var(β2f2; corrected=true) : NaN
+        var2_emp_g   = use_x2_est && !isempty(β2g) ? var(β2g; corrected=true) : NaN
+
         var_est_ols = mean(v_ols)
         var_est_fe  = mean(v_fe)
         var_est_f1  = isempty(vf1) ? NaN : mean(vf1)
         var_est_f2  = isempty(vf2) ? NaN : mean(vf2)
         var_est_g   = isempty(vg) ? NaN : mean(vg)
 
+        var2_est_ols = use_x2_est ? mean(v2_ols) : NaN
+        var2_est_fe  = use_x2_est ? mean(v2_fe) : NaN
+        var2_est_f1  = use_x2_est && !isempty(v2f1) ? mean(v2f1) : NaN
+        var2_est_f2  = use_x2_est && !isempty(v2f2) ? mean(v2f2) : NaN
+        var2_est_g   = use_x2_est && !isempty(v2g) ? mean(v2g) : NaN
+
         ratio_ols = var_est_ols / max(var_emp_ols, eps(Float64))
         ratio_fe  = var_est_fe  / max(var_emp_fe,  eps(Float64))
         ratio_f1  = isempty(βf1) ? NaN : (var_est_f1 / max(var_emp_f1, eps(Float64)))
         ratio_f2  = isempty(βf2) ? NaN : (var_est_f2 / max(var_emp_f2, eps(Float64)))
         ratio_g   = isempty(βg) ? NaN : (var_est_g / max(var_emp_g, eps(Float64)))
+
+        ratio2_ols = use_x2_est ? var2_est_ols / max(var2_emp_ols, eps(Float64)) : NaN
+        ratio2_fe  = use_x2_est ? var2_est_fe / max(var2_emp_fe, eps(Float64)) : NaN
+        ratio2_f1  = use_x2_est && !isempty(β2f1) ? var2_est_f1 / max(var2_emp_f1, eps(Float64)) : NaN
+        ratio2_f2  = use_x2_est && !isempty(β2f2) ? var2_est_f2 / max(var2_emp_f2, eps(Float64)) : NaN
+        ratio2_g   = use_x2_est && !isempty(β2g) ? var2_est_g / max(var2_emp_g, eps(Float64)) : NaN
 
         if print_each
             @printf("\n--- Results for Sample Size: %d (N2=%d, T=%d) ---\n", n, N2, T)
@@ -404,25 +502,50 @@ function mc_estimate_over_sizes(; params::NamedTuple,
 
         stats_tuple = (
             bias_ols=bias_ols, bias_fe=bias_fe, bias_fgls1=bias_f1, bias_fgls2=bias_f2, bias_gls=bias_g,
+            bias2_ols=bias2_ols, bias2_fe=bias2_fe, bias2_fgls1=bias2_f1, bias2_fgls2=bias2_f2, bias2_gls=bias2_g,
             var_emp_ols=var_emp_ols, var_emp_fe=var_emp_fe,
             var_emp_fgls1=var_emp_f1, var_emp_fgls2=var_emp_f2, var_emp_gls=var_emp_g,
+            var2_emp_ols=var2_emp_ols, var2_emp_fe=var2_emp_fe,
+            var2_emp_fgls1=var2_emp_f1, var2_emp_fgls2=var2_emp_f2, var2_emp_gls=var2_emp_g,
             var_est_ols=var_est_ols, var_est_fe=var_est_fe,
             var_est_fgls1=var_est_f1, var_est_fgls2=var_est_f2, var_est_gls=var_est_g,
+            var2_est_ols=var2_est_ols, var2_est_fe=var2_est_fe,
+            var2_est_fgls1=var2_est_f1, var2_est_fgls2=var2_est_f2, var2_est_gls=var2_est_g,
             ratio_est_emp_ols=ratio_ols, ratio_est_emp_fe=ratio_fe,
-            ratio_est_emp_fgls1=ratio_f1, ratio_est_emp_fgls2=ratio_f2, ratio_est_emp_gls=ratio_g
+            ratio_est_emp_fgls1=ratio_f1, ratio_est_emp_fgls2=ratio_f2, ratio_est_emp_gls=ratio_g,
+            ratio2_est_emp_ols=ratio2_ols, ratio2_est_emp_fe=ratio2_fe,
+            ratio2_est_emp_fgls1=ratio2_f1, ratio2_est_emp_fgls2=ratio2_f2, ratio2_est_emp_gls=ratio2_g
         )
 
         if keep_vectors
-            out[idx] = (
-                size = (N1=N1, N2=N2, T=T),
-                reps = reps_here,
-                β_ols = β_ols, v_ols = v_ols,
-                β_fe  = β_fe,  v_fe  = v_fe,
-                β_fgls1 = β_fgls1, v_fgls1 = v_fgls1,
-                β_fgls2 = β_fgls2, v_fgls2 = v_fgls2,
-                β_gls  = β_gls,  v_gls  = v_gls,
-                stats = stats_tuple
-            )
+            if use_x2_est
+                out[idx] = (
+                    size = (N1=N1, N2=N2, T=T),
+                    reps = reps_here,
+                    β_ols = β_ols, v_ols = v_ols,
+                    β2_ols = β2_ols, v2_ols = v2_ols,
+                    β_fe  = β_fe,  v_fe  = v_fe,
+                    β2_fe  = β2_fe,  v2_fe  = v2_fe,
+                    β_fgls1 = β_fgls1, v_fgls1 = v_fgls1,
+                    β2_fgls1 = β2_fgls1, v2_fgls1 = v2_fgls1,
+                    β_fgls2 = β_fgls2, v_fgls2 = v_fgls2,
+                    β2_fgls2 = β2_fgls2, v2_fgls2 = v2_fgls2,
+                    β_gls  = β_gls,  v_gls  = v_gls,
+                    β2_gls  = β2_gls,  v2_gls  = v2_gls,
+                    stats = stats_tuple
+                )
+            else
+                out[idx] = (
+                    size = (N1=N1, N2=N2, T=T),
+                    reps = reps_here,
+                    β_ols = β_ols, v_ols = v_ols,
+                    β_fe  = β_fe,  v_fe  = v_fe,
+                    β_fgls1 = β_fgls1, v_fgls1 = v_fgls1,
+                    β_fgls2 = β_fgls2, v_fgls2 = v_fgls2,
+                    β_gls  = β_gls,  v_gls  = v_gls,
+                    stats = stats_tuple
+                )
+            end
         else
             out[idx] = (
                 size = (N1=N1, N2=N2, T=T),

@@ -40,6 +40,9 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, save::Bool=fals
         E_i=p.E_i, E_j=p.E_j, E_t=p.E_t,
         sigma_i=p.sigma_i, sigma_j=p.sigma_j, sigma_t=p.sigma_t,
         mu_x=p.mu_x, sigma_x=p.sigma_x,
+        mu_x2=get(p, :mu_x2, 0.0), sigma_x2=get(p, :sigma_x2, 1.0),
+        correlate_x=get(p, :correlate_x, false), rho_x=get(p, :rho_x, 0.5),
+        correlate_x_alpha=get(p, :correlate_x_alpha, false), rho_x_alpha=get(p, :rho_x_alpha, 0.0),
         mu_u=p.mu_u, sigma_u=p.sigma_u,
         seed=p.seed
     )
@@ -56,7 +59,7 @@ function run_smoke_test!(; params::NamedTuple = RCParams.PARAMS, save::Bool=fals
 
     println("\nDimension checks:")
     @assert nrow(df) == p.N1 * N2 * T "Row count mismatch: got $(nrow(df)), expected $(p.N1 * N2 * T)"
-    required = Set(Symbol.([:i, :j, :t, :x, :u_ijt, :fe_i, :fe_j, :fe_t]))
+    required = Set(Symbol.([:i, :j, :t, :x, :x2, :u_ijt, :fe_i, :fe_j, :fe_t]))
     present  = Set(Symbol.(names(df)))
     missing  = collect(setdiff(required, present))
     @assert isempty(missing) "Missing columns: $(missing)"

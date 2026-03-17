@@ -6,11 +6,13 @@ using LinearAlgebra, Statistics, DataFrames, Plots
 
 import ..RCIO
 
-export plot_matrix_percentile, omega_eigen_tables, 
+export plot_matrix_percentile, omega_eigen_tables,
        block_eigen_summary, block_eigen_table,
        apply_plot_theme!, sample_sizes_from_results,
        plot_estimator_distribution, plot_asymptotic, plot_multi_variance, plot_variance_ratio,
+       plot_beta_density, plot_tstat_distribution,
        savefig_distribution!,savefig_heatmap!, savefig_asymptotic!, savefig_multi_variance!, savefig_variance_ratio!,
+       savefig_beta_density!, savefig_tstat!,
        make_result_plots
 
 "Percentile heatmap of a matrix (Spectral colormap, no ticks)."
@@ -365,6 +367,85 @@ function plot_variance_ratio(est_res::Vector;
     return plt
 end
 
+"""
+plot_beta_density(est_res; size_index, estimators, true_beta, bins=30)
+
+Overlay β̂ densities for multiple estimators on one plot.
+"""
+function plot_beta_density(est_res::Vector;
+    size_index::Integer,
+    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS1","FGLS2","GLS"],
+    true_beta::Real=2.0,
+    bins::Int=30
+)
+    ns = sample_sizes_from_results(est_res)
+    n = ns[size_index]
+
+    plt = plot(; legend=:topright, size=(1280, 720))
+
+    for est in estimators
+        vals, _ = select_estimates(est_res, size_index, est)
+        data = collect(skipmissing(vals))
+        if length(data) >= 2
+            xx, yy = _kde_gaussian(data)
+            plot!(plt, xx, yy; label=est, lw=2)
+        end
+    end
+
+    vline!(plt, [true_beta]; ls=:dash, color=:red, lw=2, label="true β")
+    xlabel!(plt, "β̂")
+    ylabel!(plt, "Density")
+    title!(plt, "Beta Density (n=$n, idx=$size_index)")
+    plot!(plt; grid=true)
+    return plt
+end
+
+"""
+plot_tstat_distribution(est_res; size_index, estimators, true_beta, bins=30)
+
+Overlay t-stat densities for multiple estimators + standard normal reference.
+t = (β̂ - true_β) / se(β̂)
+"""
+function plot_tstat_distribution(est_res::Vector;
+    size_index::Integer,
+    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS1","FGLS2","GLS"],
+    true_beta::Real=2.0,
+    bins::Int=30
+)
+    ns = sample_sizes_from_results(est_res)
+    n = ns[size_index]
+
+    plt = plot(; legend=:topright, size=(1280, 720))
+
+    for est in estimators
+        vals, _ = select_estimates(est_res, size_index, est)
+        vars = select_variances(est_res, size_index, est)
+
+        beta_data = collect(skipmissing(vals))
+        var_data = collect(skipmissing(vars))
+
+        if length(beta_data) >= 2 && length(var_data) >= 2
+            # Compute t-stats: (β̂ - true_β) / sqrt(var̂)
+            se_data = sqrt.(max.(var_data, 0.0))
+            tstats = (beta_data .- true_beta) ./ max.(se_data, eps())
+
+            xx, yy = _kde_gaussian(tstats)
+            plot!(plt, xx, yy; label=est, lw=2)
+        end
+    end
+
+    # Standard normal overlay
+    zz = range(-4, 4, length=200)
+    phi = @. exp(-0.5 * zz^2) / sqrt(2π)
+    plot!(plt, zz, phi; label="N(0,1)", ls=:dash, color=:black, lw=2)
+
+    xlabel!(plt, "t-statistic")
+    ylabel!(plt, "Density")
+    title!(plt, "t-Statistic Distribution (n=$n, idx=$size_index)")
+    plot!(plt; grid=true)
+    return plt
+end
+
 # ---- Saving wrappers (use RCIO naming) ----
 savefig_distribution!(plt, params; estimator::AbstractString, sample_n::Integer) =
     savefig(plt, RCIO.plot_path_estimator_dist(params; estimator=estimator, sample_n=sample_n))
@@ -380,6 +461,12 @@ savefig_multi_variance!(plt, params) =
 
 savefig_variance_ratio!(plt, params) =
     savefig(plt, RCIO.plot_path_variance_ratio(params))
+
+savefig_beta_density!(plt, params; estimator::AbstractString, sample_n::Integer) =
+    savefig(plt, RCIO.plot_path_beta_density(params; estimator=estimator, sample_n=sample_n))
+
+savefig_tstat!(plt, params; estimator::AbstractString, sample_n::Integer) =
+    savefig(plt, RCIO.plot_path_tstat(params; estimator=estimator, sample_n=sample_n))
 
 # ---- Orchestrator ------------------------------------------------------------
 
@@ -462,6 +549,34 @@ function make_result_plots(; params::NamedTuple,
                 display(plt)
             end
         end
+    end
+
+    # 1b) Beta density overlay plot (all estimators on one plot)
+    if get(p, :make_beta_density_plots, false)
+        beta_dens_ests = get(p, :beta_density_estimators, ["OLS","OLS FE","FGLS1","FGLS2","GLS"])
+        plt_bd = plot_beta_density(est_res;
+                                    size_index=size_idx,
+                                    estimators=beta_dens_ests,
+                                    true_beta=true_beta)
+        if save
+            ns = sample_sizes_from_results(est_res); n = ns[size_idx]
+            savefig_beta_density!(plt_bd, params; estimator="all", sample_n=n)
+        end
+        if show; display(plt_bd); end
+    end
+
+    # 1c) t-statistic distribution plot
+    if get(p, :make_tstat_plots, false)
+        tstat_ests = get(p, :tstat_estimators, ["OLS","OLS FE","FGLS1","FGLS2","GLS"])
+        plt_ts = plot_tstat_distribution(est_res;
+                                          size_index=size_idx,
+                                          estimators=tstat_ests,
+                                          true_beta=true_beta)
+        if save
+            ns = sample_sizes_from_results(est_res); n = ns[size_idx]
+            savefig_tstat!(plt_ts, params; estimator="all", sample_n=n)
+        end
+        if show; display(plt_ts); end
     end
 
     # 2) Asymptotic bias

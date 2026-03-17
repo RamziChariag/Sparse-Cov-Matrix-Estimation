@@ -11,7 +11,9 @@ export build_output_basename, output_dir, output_path,
        estimation_results_path, save_estimation_results!,
        load_estimation_results,
        plots_dir_for_results, ensure_plots_dir!, results_basename, plot_path_omega_heatmap,
-       plot_path_estimator_dist, plot_path_asymptotic, plot_path_multi_variance, plot_path_variance_ratio
+       plot_path_estimator_dist, plot_path_asymptotic, plot_path_multi_variance, plot_path_variance_ratio,
+       plot_path_beta_density, plot_path_tstat,
+       savefig_beta_density!, savefig_tstat!
 
 "Build base filename according to your rules."
 function build_output_basename(p::NamedTuple)
@@ -291,5 +293,27 @@ function plot_path_variance_ratio(params::NamedTuple)
     base = results_basename(params)
     return joinpath(dir, string(base, "_var_ratios.png"))
 end
+
+"…/<results base>/ <base>_beta_density_<estimator>_<n>.png"
+function plot_path_beta_density(params::NamedTuple; estimator::AbstractString, sample_n::Integer)
+    dir  = ensure_plots_dir!(params)
+    base = results_basename(params)
+    est  = _slug(estimator)
+    return joinpath(dir, string(base, "_beta_density_", est, "_", sample_n, ".png"))
+end
+
+"…/<results base>/ <base>_tstat_<estimator>_<n>.png"
+function plot_path_tstat(params::NamedTuple; estimator::AbstractString, sample_n::Integer)
+    dir  = ensure_plots_dir!(params)
+    base = results_basename(params)
+    est  = _slug(estimator)
+    return joinpath(dir, string(base, "_tstat_", est, "_", sample_n, ".png"))
+end
+
+savefig_beta_density!(plt, params; estimator::AbstractString, sample_n::Integer) =
+    savefig(plt, plot_path_beta_density(params; estimator=estimator, sample_n=sample_n))
+
+savefig_tstat!(plt, params; estimator::AbstractString, sample_n::Integer) =
+    savefig(plt, plot_path_tstat(params; estimator=estimator, sample_n=sample_n))
 
 end # module

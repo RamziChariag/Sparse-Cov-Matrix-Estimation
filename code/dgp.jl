@@ -28,18 +28,24 @@ Generate one full i–j–t panel dataset with:
 
 Returns (df, meta) where meta contains Ωi, Ωj, Ωt and the RNG seed used.
 """
-function generate_dataset(; 
+function generate_dataset(;
         N1::Int, N2::Int, T::Int,
         i_block::Bool, j_block::Bool, t_block::Bool,
         i_draw_mode::Symbol, j_draw_mode::Symbol, t_draw_mode::Symbol,
         E_i::Real, E_j::Real, E_t::Real,
         sigma_i::Real, sigma_j::Real, sigma_t::Real,
         mu_x::Real, sigma_x::Real,
+        mu_x2::Real=0.0, sigma_x2::Real=1.0,
         mu_u::Real, sigma_u::Real,
         seed::Integer = 42,
         Ωi_fixed::Union{Nothing,AbstractMatrix}=nothing,
         Ωj_fixed::Union{Nothing,AbstractMatrix}=nothing,
-        Ωt_fixed::Union{Nothing,AbstractMatrix}=nothing
+        Ωt_fixed::Union{Nothing,AbstractMatrix}=nothing,
+        # --- x2 controls ---
+        correlate_x::Bool=false,
+        rho_x::Real=0.5,
+        correlate_x_alpha::Bool=false,
+        rho_x_alpha::Real=0.0
     )
 
     rng = MersenneTwister(seed)
@@ -145,12 +151,31 @@ elseif i_draw_mode == :mixed
     fe_j_vec = to_vec(fe_j_tensor)
     fe_t_vec = to_vec(fe_t_tensor)
 
-    # x and u
-    x = rand(rng, Normal(mu_x, sigma_x), n)
+    # x, x2, and u
     u = rand(rng, Normal(mu_u, sigma_u), n)
 
+    if correlate_x
+        # Draw (x1, x2) from bivariate normal with correlation rho_x
+        Σ_x = [sigma_x^2          rho_x*sigma_x*sigma_x2;
+                rho_x*sigma_x*sigma_x2  sigma_x2^2]
+        μ_x = [mu_x, mu_x2]
+        d = MvNormal(μ_x, Symmetric(Σ_x))
+        X12 = rand(rng, d, n)    # 2 × n
+        x  = X12[1, :]
+        x2 = X12[2, :]
+    else
+        x  = rand(rng, Normal(mu_x, sigma_x), n)
+        x2 = rand(rng, Normal(mu_x2, sigma_x2), n)
+    end
+
+    # Optional: correlate x with alpha (i fixed effect)
+    if correlate_x_alpha && rho_x_alpha != 0.0
+        # x_obs = x_exog + rho * fe_i  (endogeneity via correlation with i-effect)
+        x .= x .+ rho_x_alpha .* fe_i_vec
+    end
+
     df = DataFrame(i=i_vec, j=j_vec, t=t_vec,
-                   x=x, u_ijt=u,
+                   x=x, x2=x2, u_ijt=u,
                    fe_i=fe_i_vec, fe_j=fe_j_vec, fe_t=fe_t_vec)
 
     meta = (; Ωi=Ωi, Ωj=Ωj, Ωt=Ωt, seed=seed)

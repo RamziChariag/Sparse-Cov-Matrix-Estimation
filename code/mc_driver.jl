@@ -61,6 +61,9 @@ function run_mc!(; params::NamedTuple = RCParams.PARAMS, save::Bool=true)
                 E_i=params.E_i, E_j=params.E_j, E_t=params.E_t,
                 sigma_i=params.sigma_i, sigma_j=params.sigma_j, sigma_t=params.sigma_t,
                 mu_x=params.mu_x, sigma_x=params.sigma_x,
+                mu_x2=get(params, :mu_x2, 0.0), sigma_x2=get(params, :sigma_x2, 1.0),
+                correlate_x=get(params, :correlate_x, false), rho_x=get(params, :rho_x, 0.5),
+                correlate_x_alpha=get(params, :correlate_x_alpha, false), rho_x_alpha=get(params, :rho_x_alpha, 0.0),
                 mu_u=params.mu_u, sigma_u=params.sigma_u,
                 seed=seed_r,
                 # ---------- NEW: pin Ω across reps ----------
