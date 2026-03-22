@@ -431,6 +431,8 @@ function sigmas_fgls2_double_diff(df::DataFrame, N1::Int, N2::Int, T::Int, beta_
     σ2_u = 0.0
     if !(repeat_alpha_fgls2 || repeat_gamma_fgls2 || repeat_lambda_fgls2)
         σ2_u = max(0.0, var(res_u; corrected=true))
+        # Dof rescale
+        σ2_u *= (N1 * N2 * T - 1) / max(N1 * N2 * T - (N1+N2+T+1), 1)
     else
         A = reshape(res_u, N1, N2, T)  # [i, j, t]
 
@@ -487,17 +489,28 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
 
     if !two_step
         # --- single-step procedure ---
-        σu2 = sigmas.sigma_u2
+        # Use double-diff for σ̂²_u (same residual basis as FGLS2), so that the
+        # ONLY difference between FGLS1 and FGLS2 is Ω block construction.
+        S_dd = sigmas_fgls2_double_diff(df, N1, N2, T, beta_hat;
+            x_col=x_col, y_col=y_col,
+            repeat_alpha_fgls2=repeat_alpha_fgls2,
+            repeat_gamma_fgls2=repeat_gamma_fgls2,
+            repeat_lambda_fgls2=repeat_lambda_fgls2,
+            beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2
+        )
+        σu2 = S_dd.sigma_u2
 
         Ωa =
             if i_block_est
                 Ωα = generate_single_component_omega(df, :i, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
                                                      beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
-                    # subtract σ̂_u^2 / T from diag
-                    diag_dominance_safe_subtract!(Ωα, σu2 / T)
+                    # Raw outer product Ω = BB'/(N2*T) has E[diag] = σ²_α + σ²_u
+                    # so subtract the full σ²_u directly (not via diag_dominance_safe_subtract!
+                    # which can block subtraction when off-diag elements are large)
+                    @inbounds for k in 1:size(Ωα, 1); Ωα[k, k] -= σu2; end
                 end
-                Symmetric(Matrix(Ωα))
+                make_psd_by_minimal_ridge(Ωα)
             else
                 sigmas.sigma_alpha2 * I(N1)
             end
@@ -507,10 +520,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωγ = generate_single_component_omega(df, :j, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
                                                      beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
-                    # subtract σ̂_u^2 / N1 from diag
-                    diag_dominance_safe_subtract!(Ωγ, σu2 / N1)
+                    # Raw outer product Ω = BB'/(N1*T) has E[diag] = σ²_γ + σ²_u
+                    @inbounds for k in 1:size(Ωγ, 1); Ωγ[k, k] -= σu2; end
                 end
-                Symmetric(Matrix(Ωγ))
+                make_psd_by_minimal_ridge(Ωγ)
             else
                 sigmas.sigma_gamma2 * I(N2)
             end
@@ -520,10 +533,10 @@ function estimate_omegas(df::DataFrame, N1::Int, N2::Int, T::Int,
                 Ωλ = generate_single_component_omega(df, :t, N1, N2, T, σu2, beta_hat; x_col=x_col, y_col=y_col,
                                                      beta_hat2=beta_hat2, x2_col=x2_col, use_x2=use_x2)
                 if subtract_sigma_u2
-                    # subtract σ̂_u^2 / N1 from diag
-                    diag_dominance_safe_subtract!(Ωλ, σu2 / N1)
+                    # Raw outer product Ω = BB'/(N1*N2) has E[diag] = σ²_λ + σ²_u
+                    @inbounds for k in 1:size(Ωλ, 1); Ωλ[k, k] -= σu2; end
                 end
-                Symmetric(Matrix(Ωλ))
+                make_psd_by_minimal_ridge(Ωλ)
             else
                 sigmas.sigma_lambda2 * I(T)
             end

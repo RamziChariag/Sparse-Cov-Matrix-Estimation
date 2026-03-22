@@ -10,9 +10,11 @@ export plot_matrix_percentile, omega_eigen_tables,
        block_eigen_summary, block_eigen_table,
        apply_plot_theme!, sample_sizes_from_results,
        plot_estimator_distribution, plot_asymptotic, plot_multi_variance, plot_variance_ratio,
-       plot_beta_density, plot_tstat_distribution,
+       plot_beta_density, plot_tstat_distribution, plot_tstat_vs_n,
+       plot_rejection_rate,
        savefig_distribution!,savefig_heatmap!, savefig_asymptotic!, savefig_multi_variance!, savefig_variance_ratio!,
-       savefig_beta_density!, savefig_tstat!,
+       savefig_beta_density!, savefig_tstat!, savefig_tstat_vs_n!,
+       savefig_rejection_rate!,
        make_result_plots
 
 "Percentile heatmap of a matrix (Spectral colormap, no ticks)."
@@ -30,9 +32,8 @@ function plot_matrix_percentile(Ω::AbstractMatrix; title::AbstractString="Matri
     end
 
     plt = heatmap(
-        ranks;
+        A;
         c = :Spectral,
-        colorbar_title = "Percentile Rank",
         title = title,
         xticks = false,
         yticks = false,
@@ -134,7 +135,7 @@ function select_estimates(est_res::Vector, size_index::Integer, estimator::Abstr
     elseif est in ["gls"]
         return (r.β_gls, n)
     else
-        error("Unknown estimator: $estimizer")
+        error("Unknown estimator: $estimator")
     end
 end
 
@@ -156,6 +157,51 @@ function select_variances(est_res::Vector, size_index::Integer, estimator::Abstr
     else
         error("Unknown estimator: $estimator")
     end
+end
+
+"Get β₂ estimates vector (per rep) by estimator + size index. Returns (vec, n)."
+function select_estimates_beta2(est_res::Vector, size_index::Integer, estimator::AbstractString)
+    @assert 1 ≤ size_index ≤ length(est_res) "size_index out of range"
+    r = est_res[size_index]
+    n = r.size.N1 * r.size.N2 * r.size.T
+    est = lowercase(estimator)
+    field = if est in ["ols"]
+        :β2_ols
+    elseif est in ["ols fe", "fe", "fe-ols", "fe_ols"]
+        :β2_fe
+    elseif est in ["fgls1"]
+        :β2_fgls1
+    elseif est in ["fgls2"]
+        :β2_fgls2
+    elseif est in ["gls"]
+        :β2_gls
+    else
+        error("Unknown estimator: $estimator")
+    end
+    hasproperty(r, field) || error("β₂ estimates not available (use_x2_est=false?). Missing field: $field")
+    return (getproperty(r, field), n)
+end
+
+"Get β₂ estimated-variance vectors (per rep) by estimator + size index."
+function select_variances_beta2(est_res::Vector, size_index::Integer, estimator::AbstractString)
+    @assert 1 ≤ size_index ≤ length(est_res) "size_index out of range"
+    r = est_res[size_index]
+    est = lowercase(estimator)
+    field = if est in ["ols"]
+        :v2_ols
+    elseif est in ["ols fe", "fe", "fe-ols", "fe_ols"]
+        :v2_fe
+    elseif est in ["fgls1"]
+        :v2_fgls1
+    elseif est in ["fgls2"]
+        :v2_fgls2
+    elseif est in ["gls"]
+        :v2_gls
+    else
+        error("Unknown estimator: $estimator")
+    end
+    hasproperty(r, field) || error("β₂ variances not available (use_x2_est=false?). Missing field: $field")
+    return getproperty(r, field)
 end
 
 # ---- Simple KDE for overlay (no extra deps) ----
@@ -468,6 +514,199 @@ savefig_beta_density!(plt, params; estimator::AbstractString, sample_n::Integer)
 savefig_tstat!(plt, params; estimator::AbstractString, sample_n::Integer) =
     savefig(plt, RCIO.plot_path_tstat(params; estimator=estimator, sample_n=sample_n))
 
+savefig_tstat_vs_n!(plt, params; estimator::AbstractString) =
+    savefig(plt, RCIO.plot_path_tstat_vs_n(params; estimator=estimator))
+
+# ---- t-stat vs sample size (size/power) plot --------------------------------
+
+"""
+    plot_tstat_vs_n(est_res; estimator, beta_true, beta2_null,
+                    size_range=nothing, fig_size=(1280,720))
+
+Line plot of average t-statistic vs sample size n.
+
+- β₁ (red):  t₁ = (β̂₁ - beta_true) / se(β̂₁)  — size test (H₀ true)
+- β₂ (blue): t₂ = (β̂₂ - beta2_null) / se(β̂₂) — power test (H₀ false when β₂ ≠ beta2_null in DGP)
+
+Lines show mean t-stat across reps; shaded ribbons show ± 1 standard error of the mean.
+"""
+function plot_tstat_vs_n(est_res::Vector;
+    estimator::AbstractString="FGLS1",
+    beta_true::Real=2.0,
+    beta2_null::Real=0.0,
+    size_range::Union{Nothing,UnitRange{Int}}=nothing,
+    fig_size=(1280, 720)
+)
+    ns_all = sample_sizes_from_results(est_res)
+    idxs = size_range === nothing ? collect(eachindex(est_res)) : collect(size_range)
+    ns = ns_all[idxs]
+
+    mean_t1 = Float64[]; se_t1 = Float64[]
+    mean_t2 = Float64[]; se_t2 = Float64[]
+
+    for i in idxs
+        # β₁ t-stats (size test)
+        betas1, _ = select_estimates(est_res, i, estimator)
+        vars1 = select_variances(est_res, i, estimator)
+        b1 = collect(skipmissing(betas1))
+        v1 = collect(skipmissing(vars1))
+
+        if !isempty(b1) && !isempty(v1)
+            se1 = sqrt.(max.(v1, 0.0))
+            t1 = (b1 .- beta_true) ./ max.(se1, eps())
+            push!(mean_t1, mean(t1))
+            push!(se_t1, std(t1) / sqrt(length(t1)))
+        else
+            push!(mean_t1, NaN); push!(se_t1, NaN)
+        end
+
+        # β₂ t-stats (power test)
+        betas2, _ = select_estimates_beta2(est_res, i, estimator)
+        vars2 = select_variances_beta2(est_res, i, estimator)
+        b2 = collect(skipmissing(betas2))
+        v2 = collect(skipmissing(vars2))
+
+        if !isempty(b2) && !isempty(v2)
+            se2 = sqrt.(max.(v2, 0.0))
+            t2 = (b2 .- beta2_null) ./ max.(se2, eps())
+            push!(mean_t2, mean(t2))
+            push!(se_t2, std(t2) / sqrt(length(t2)))
+        else
+            push!(mean_t2, NaN); push!(se_t2, NaN)
+        end
+    end
+
+    plt = plot(; legend=:best, size=fig_size)
+
+    # β₁ (red) — size test
+    plot!(plt, ns, mean_t1;
+          label="β₁", lw=2, color=:red,
+          ribbon=se_t1, fillalpha=0.2, fillcolor=:red)
+
+    # β₂ (blue) — power test
+    plot!(plt, ns, mean_t2;
+          label="β₂", lw=2, color=:blue,
+          ribbon=se_t2, fillalpha=0.2, fillcolor=:blue)
+
+    # Reference line at 0
+    hline!(plt, [0.0]; ls=:dash, color=:black, lw=1, label="")
+
+    xlabel!(plt, "n (sample size)")
+    ylabel!(plt, "Average t-statistic")
+    title!(plt, "t-Statistic vs Sample Size: $(estimator)")
+    plot!(plt; grid=true)
+    return plt
+end
+
+# ---- Rejection rate (size + power) vs n --------------------------------------
+
+savefig_rejection_rate!(plt, params) =
+    savefig(plt, RCIO.plot_path_rejection_rate(params))
+
+"""
+    plot_rejection_rate(est_res; estimators, beta_true, beta2_null,
+                         alpha=0.05, size_range=nothing, fig_size=(1280,720))
+
+Plot empirical rejection rates vs sample size n for **all estimators on one plot**.
+
+Two lines per estimator (solid = size, dashed = power):
+
+- **Size (β₁):**  H₀: β₁ = beta_true.  Since beta_true IS the true value,
+  the rejection rate should converge to `alpha` (nominal level).
+  `rej_size = mean(|t₁| > z_{α/2})` where `t₁ = (β̂₁ - beta_true) / se(β̂₁)`.
+
+- **Power (β₂):** H₀: β₂ = beta2_null (= beta2_true in the DGP, e.g. 2.0).
+  Since `use_x2_dgp = false`, the actual β₂ is **0**, so H₀ is FALSE.
+  `rej_power = mean(|t₂| > z_{α/2})` where `t₂ = (β̂₂ - beta2_null) / se(β̂₂)`.
+  Power should increase toward 1 as n grows.
+
+Horizontal dashed black line at `alpha` for reference.
+"""
+function plot_rejection_rate(est_res::Vector;
+    estimators::Vector{<:AbstractString}=String["OLS","OLS FE","FGLS1","FGLS2","GLS"],
+    beta_true::Real=2.0,
+    beta2_null::Real=0.0,
+    alpha::Real=0.05,
+    size_range::Union{Nothing,UnitRange{Int}}=nothing,
+    fig_size=(1280, 720)
+)
+    ns_all = sample_sizes_from_results(est_res)
+    idxs = size_range === nothing ? collect(eachindex(est_res)) : collect(size_range)
+    ns = ns_all[idxs]
+    z_crit = quantile_normal_two_sided(alpha)
+
+    plt = plot(; legend=:right, size=fig_size)
+
+    for est in estimators
+        rej_size  = Float64[]
+        rej_power = Float64[]
+
+        for i in idxs
+            # --- Size: β₁ ---
+            betas1, _ = select_estimates(est_res, i, est)
+            vars1     = select_variances(est_res, i, est)
+            b1 = collect(skipmissing(betas1))
+            v1 = collect(skipmissing(vars1))
+
+            if !isempty(b1) && !isempty(v1)
+                se1 = sqrt.(max.(v1, 0.0))
+                t1  = abs.((b1 .- beta_true) ./ max.(se1, eps()))
+                push!(rej_size, mean(t1 .> z_crit))
+            else
+                push!(rej_size, NaN)
+            end
+
+            # --- Power: β₂ ---
+            try
+                betas2, _ = select_estimates_beta2(est_res, i, est)
+                vars2     = select_variances_beta2(est_res, i, est)
+                b2 = collect(skipmissing(betas2))
+                v2 = collect(skipmissing(vars2))
+
+                if !isempty(b2) && !isempty(v2)
+                    se2 = sqrt.(max.(v2, 0.0))
+                    t2  = abs.((b2 .- beta2_null) ./ max.(se2, eps()))
+                    push!(rej_power, mean(t2 .> z_crit))
+                else
+                    push!(rej_power, NaN)
+                end
+            catch
+                push!(rej_power, NaN)
+            end
+        end
+
+        # Solid line for size, dashed for power
+        plot!(plt, ns, rej_size;  label="$(est) (size)",  lw=2, ls=:solid)
+        plot!(plt, ns, rej_power; label="$(est) (power)", lw=2, ls=:dash)
+    end
+
+    # Nominal level reference
+    hline!(plt, [alpha]; ls=:dot, color=:black, lw=1.5, label="")
+
+    xlabel!(plt, "n (sample size)")
+    ylabel!(plt, "Rejection Rate")
+    title!(plt, "Empirical Rejection Rate: Size and Power")
+    # Plot with grid and legend in bottom right corner
+    plot!(plt; grid=true, legend=:bottomright)
+    return plt
+end
+
+"Two-sided critical value for standard normal at significance level α."
+function quantile_normal_two_sided(α::Real)
+    # Inverse normal CDF approximation (Beasley-Springer-Moro, good to ~1e-6)
+    p = 1.0 - α / 2.0
+    # Rational approximation for probit
+    t = if p > 0.5
+        sqrt(-2.0 * log(1.0 - p))
+    else
+        sqrt(-2.0 * log(p))
+    end
+    c0, c1, c2 = 2.515517, 0.802853, 0.010328
+    d1, d2, d3 = 1.432788, 0.189269, 0.001308
+    z = t - (c0 + c1*t + c2*t^2) / (1.0 + d1*t + d2*t^2 + d3*t^3)
+    return p > 0.5 ? z : -z
+end
+
 # ---- Orchestrator ------------------------------------------------------------
 
 """
@@ -608,6 +847,46 @@ function make_result_plots(; params::NamedTuple,
                                  size_range=size_range);
     if save; savefig_variance_ratio!(plt_vr, params); end
     if show; display(plt_vr); end
+
+    # 6) t-stat vs sample size (size/power) — one plot per estimator
+    if get(p, :make_tstat_vs_n_plots, false)
+        tstat_n_ests = get(p, :tstat_vs_n_estimators, ["OLS","OLS FE","FGLS1","FGLS2","GLS"])
+        beta2_null   = get(p, :beta2_null, 0.0)
+        for est in tstat_n_ests
+            try
+                plt_tn = plot_tstat_vs_n(est_res;
+                                          estimator=est,
+                                          beta_true=true_beta,
+                                          beta2_null=beta2_null,
+                                          size_range=size_range)
+                if save
+                    savefig_tstat_vs_n!(plt_tn, params; estimator=est)
+                end
+                if show; display(plt_tn); end
+            catch err
+                @warn "t-stat vs n plot failed for $est" exception=(err, catch_backtrace())
+            end
+        end
+    end
+
+    # 7) Rejection rate (size + power) vs n — single plot, all estimators
+    if get(p, :make_rejection_rate_plot, true)
+        rej_ests   = get(p, :rejection_rate_estimators, asym_ests)
+        beta2_null = get(p, :beta2_null, 0.0)
+        rej_alpha  = get(p, :rejection_alpha, 0.05)
+        try
+            plt_rr = plot_rejection_rate(est_res;
+                                          estimators=rej_ests,
+                                          beta_true=true_beta,
+                                          beta2_null=beta2_null,
+                                          alpha=rej_alpha,
+                                          size_range=size_range)
+            if save; savefig_rejection_rate!(plt_rr, params); end
+            if show; display(plt_rr); end
+        catch err
+            @warn "Rejection rate plot failed" exception=(err, catch_backtrace())
+        end
+    end
 
     return nothing
 end

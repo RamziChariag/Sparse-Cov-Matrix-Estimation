@@ -12,7 +12,8 @@ export build_output_basename, output_dir, output_path,
        load_estimation_results,
        plots_dir_for_results, ensure_plots_dir!, results_basename, plot_path_omega_heatmap,
        plot_path_estimator_dist, plot_path_asymptotic, plot_path_multi_variance, plot_path_variance_ratio,
-       plot_path_beta_density, plot_path_tstat,
+       plot_path_beta_density, plot_path_tstat, plot_path_tstat_vs_n,
+       plot_path_rejection_rate,
        savefig_beta_density!, savefig_tstat!
 
 "Build base filename according to your rules."
@@ -315,5 +316,20 @@ savefig_beta_density!(plt, params; estimator::AbstractString, sample_n::Integer)
 
 savefig_tstat!(plt, params; estimator::AbstractString, sample_n::Integer) =
     savefig(plt, plot_path_tstat(params; estimator=estimator, sample_n=sample_n))
+
+"…/<results base>/ <base>_tstat_vs_n_<estimator>.png"
+function plot_path_tstat_vs_n(params::NamedTuple; estimator::AbstractString)
+    dir  = ensure_plots_dir!(params)
+    base = results_basename(params)
+    est  = _slug(estimator)
+    return joinpath(dir, string(base, "_tstat_vs_n_", est, ".png"))
+end
+
+"…/<results base>/ <base>_rejection_rate.png"
+function plot_path_rejection_rate(params::NamedTuple)
+    dir  = ensure_plots_dir!(params)
+    base = results_basename(params)
+    return joinpath(dir, string(base, "_rejection_rate.png"))
+end
 
 end # module
